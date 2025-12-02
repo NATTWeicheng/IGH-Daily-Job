@@ -5,8 +5,11 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const portnetRoute = require('./api/portnetRoute')
-app.use('/portnet', portnetRoute)
+const dailyJobRoute = require('./api/dailyJobRoute')
+app.use('/dailyJob', dailyJobRoute)
+
+const dailyInvoiceRoute = require('./api/dailyInvoiceRoute')
+app.use('/dailyInvoice', dailyInvoiceRoute)
 
 app.get('/', (req, res) => {
     res.send("This is the API server.")

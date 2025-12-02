@@ -1,7 +1,6 @@
 const express = require("express");
-const { launchAndGoto } = require("../workflows/portnet");
 const router = express.Router();
-const {getPage, getBrowser} = require('../workflows/portnet')
+const {getPage, getBrowser, launchAndGoto} = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
