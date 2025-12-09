@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, getBrowser, launchAndGoto} = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto} = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -8,13 +8,8 @@ const fs = require('fs');
 // kill chronium
 router.post('/stop-chromium', async (req, res) => {
   try {
-    const browser = getBrowser(); // Get the browser instance
-    if (browser) {
-      await browser.close();
-      res.json({ success: true, message: 'Browser closed successfully' });
-    } else {
-      res.json({ success: false, message: 'No browser instance running' });
-    }
+    await cleanup();
+    res.json({ success: true, message: 'Browser closed successfully' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -24,32 +19,139 @@ router.post('/stop-chromium', async (req, res) => {
 router.post("/fill-login-details", async (req, res) => {
     try {
         const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
+        const page = getPage();
+        
+        // Check timing BEFORE starting login
+        let authResult = getGoogleAuthCode();
+        console.log(`Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
+        
+        // If less than 15 seconds, wait for fresh code BEFORE logging in
+        if (authResult.secondsRemaining < 15) {
+            console.log('Not enough time for login flow, waiting for fresh code window...');
+            const waitTime = (authResult.secondsRemaining + 2) * 1000;
+            await page.waitForTimeout(waitTime);
+            authResult = getGoogleAuthCode();
+            console.log(`Fresh code ready: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
+        }
+        
+        // Fill username
+        await page.waitForSelector('#mat-input-0', { state: 'visible', timeout: 10000 });
+        await page.locator('#mat-input-0').fill(process.env.PORTNET_USER);
+        
+        // Fill password
+        await page.waitForSelector('#mat-input-1', { state: 'visible', timeout: 10000 });
+        await page.locator('#mat-input-1').fill(process.env.PORTNET_PASSWORD);
 
-        page = getPage();
-        // fill in username and password
-        await page.waitForTimeout(1000);
-        await page.locator('#mat-input-0').fill(process.env.PORTNET_USER)
-        await page.waitForTimeout(1000);
-        await page.locator('#mat-input-1').fill(process.env.PORTNET_PASSWORD)
-
-        // click login
-        await page.waitForTimeout(1000);
+        // Click login
         await page.locator('body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button').click();
         
-        // fill in 2fa (google authentication)
-        await page.waitForTimeout(1000);
-        let googleAuthCode = getGoogleAuthCode();
-        await page.locator('#PASSWORD').focus();
-        await page.locator('#PASSWORD').fill(googleAuthCode);
+        // Wait for 2FA page
+        await page.waitForSelector('#PASSWORD', { state: 'visible', timeout: 10000 });
+        console.log('2FA page loaded');
         
-        // click continue
+        // Get current code (should still have plenty of time)
+        authResult = getGoogleAuthCode();
+        console.log(`At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
+        
+        // Clear field first
+        await page.locator('#PASSWORD').clear();
+        await page.waitForTimeout(300);
+        
+        // Click to focus
+        await page.locator('#PASSWORD').click();
+        await page.waitForTimeout(200);
+        
+        // Fill the code
+        await page.locator('#PASSWORD').fill(authResult.code);
+        
+        // Verify it was actually filled
+        const filledValue = await page.locator('#PASSWORD').inputValue();
+        console.log(`Verification - Expected: "${authResult.code}", Actual: "${filledValue}"`);
+        
+        if (filledValue !== authResult.code) {
+            console.warn('Fill failed, retrying...');
+            
+            // Retry once
+            await page.locator('#PASSWORD').clear();
+            await page.waitForTimeout(300);
+            await page.locator('#PASSWORD').click();
+            await page.waitForTimeout(200);
+            
+            // Try type instead of fill
+            await page.locator('#PASSWORD').type(authResult.code, { delay: 50 });
+            
+            const retryValue = await page.locator('#PASSWORD').inputValue();
+            console.log(`Retry verification: "${retryValue}"`);
+            
+            if (retryValue !== authResult.code) {
+                throw new Error(`Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${retryValue}`);
+            }
+        }
+        
+        console.log(`Submitting 2FA code: ${authResult.code}`);
+        
+        // Click continue
         await page.locator('#Continue').click();
-
-        res.json(result);
+        
+        console.log('Waiting for response...');
+        
+        // Wait a bit for processing
+        await page.waitForTimeout(3000);
+        
+        // Check current state
+        const currentUrl = page.url();
+        console.log('Current URL:', currentUrl);
+        
+        // Check for error messages first
+        const errorCount = await page.locator('text=/invalid|incorrect|wrong|error/i').count();
+        if (errorCount > 0) {
+            const errorText = await page.locator('text=/invalid|incorrect|wrong|error/i').first().textContent();
+            throw new Error(`2FA Error: ${errorText}`);
+        }
+        
+        // Try multiple selectors for dashboard
+        const dashboardSelectors = [
+            'div.slidebar',
+            '.main-content',
+            'app-container-group',
+            '[class*="dashboard"]'
+        ];
+        
+        let dashboardFound = false;
+        for (const selector of dashboardSelectors) {
+            const count = await page.locator(selector).count();
+            if (count > 0) {
+                console.log(`✓ Dashboard found with selector: ${selector}`);
+                dashboardFound = true;
+                break;
+            }
+        }
+        
+        if (!dashboardFound) {
+            // Maybe we're on a different page but login succeeded?
+            if (!currentUrl.includes('login') && !currentUrl.includes('auth')) {
+                console.log('✓ URL changed from auth page - assuming login success');
+                dashboardFound = true;
+            }
+        }
+        
+        if (dashboardFound) {
+            res.json({ 
+                status: 'success',
+                message: 'Login completed successfully',
+                codeUsed: authResult.code,
+                url: currentUrl
+            });
+        } else {
+            throw new Error(`Dashboard not found. URL: ${currentUrl}`);
+        }
 
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        console.error('Login error:', err);
+        res.status(500).json({ 
+            status: 'error', 
+            message: err.message 
+        });
     }
 });
 
@@ -108,75 +210,220 @@ router.post("/click-enquire-invoice", async (req, res) => {
     }
 });
 
-// route to select IGH from the dropdown; click accepted and fill date to 1 day ago
-router.post("/fill-job-payment-table", async (req, res) => {
-    try {
-        page = getPage();
-        
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
-        });
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
-        }
-        
-        await frame.waitForSelector('select[name="invoiceType"]', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
-        await frame.waitForTimeout(500);
-        
-        await frame.selectOption('select[name="invoiceType"]', 'LD');
-        await frame.waitForTimeout(500);
-        
-        // Date logic
-        const today = new Date();
-        const oneWeekAgo = new Date(today);
-        oneWeekAgo.setDate(today.getDate() - 7);
-        
-        const day = String(oneWeekAgo.getDate()).padStart(2, '0');
-        const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
-        const year = String(oneWeekAgo.getFullYear());
-        
-        await frame.fill('input[name="fDD"]', day);
-        await frame.waitForTimeout(200);
-        await frame.fill('input[name="fMM"]', month);
-        await frame.waitForTimeout(200);
-        await frame.fill('input[name="fYYYY"]', year);
-        
-        await frame.waitForTimeout(500);
-        
-        await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
-        
-        // Wait for the "Details" links to appear
-        await frame.waitForSelector('a:has-text("Detail Information")', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
-        await frame.waitForTimeout(1000);
-        
-        // Get ONLY the rows with "Details" links (the actual job rows)
-        const detailsLinks = await frame.locator('a:has-text("Detail Information")').all();
-        
-        console.log(`Found ${detailsLinks.length} job items with Details links`);
-        
-        res.json({ 
-            status: 'success', 
-            message: 'Search completed',
-            itemCount: detailsLinks.length,
-            fromDate: `${day}/${month}/${year}`
-        });
+// route to select IGH from the dropdown; fill date to 1 week ago - for LD only
+router.post("/fill-job-payment-tableLD", async (req, res) => {
+  try {
+    page = getPage();
 
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+    const frameElement = await page.waitForSelector('iframe.frame__webview', {
+      state: 'attached',
+      timeout: 10000
+    });
+
+    const frame = await frameElement.contentFrame();
+
+    if (!frame) {
+      throw new Error('Could not access iframe content');
     }
+
+    await frame.waitForSelector('select[name="invoiceType"]', {
+      state: 'visible',
+      timeout: 10000
+    });
+
+    await frame.waitForTimeout(500);
+
+    await frame.selectOption('select[name="invoiceType"]', 'LD');
+    await frame.waitForTimeout(500);
+
+    // Date logic: one week ago
+    const today = new Date();
+    const oneWeekAgo = new Date(today);
+    oneWeekAgo.setDate(today.getDate() - 7);
+
+    const day = String(oneWeekAgo.getDate()).padStart(2, '0');
+    const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
+    const year = String(oneWeekAgo.getFullYear());
+
+    await frame.fill('input[name="fDD"]', day);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="fMM"]', month);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="fYYYY"]', year);
+
+    await frame.waitForTimeout(500);
+
+    // submit
+    await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
+
+    // Wait up to timeout for either details links OR the "No record found" error text.
+    const timeout = 10000; // ms
+    const pollInterval = 500; // ms
+    const start = Date.now();
+
+    let detailsCount = 0;
+    let noRecordDetected = false;
+
+    while (Date.now() - start < timeout) {
+      // count doesn't throw; it's safe to call repeatedly
+      detailsCount = await frame.locator('a:has-text("Detail Information")').count();
+      // detect the common error text shown in the HTML you pasted
+      const noRecordCount = await frame.locator('text=No record found').count();
+
+      if (detailsCount > 0) {
+        break; // found results
+      }
+
+      if (noRecordCount > 0) {
+        noRecordDetected = true;
+        break; // explicit "no record" shown on page
+      }
+
+      // small wait before next check
+      await frame.waitForTimeout(pollInterval);
+    }
+
+    // Decide response based on what we observed
+    if (detailsCount > 0) {
+      console.log(`Found ${detailsCount} job items with Details links`);
+      return res.json({
+        status: 'success',
+        message: 'Search completed',
+        itemCount: detailsCount,
+        fromDate: `${day}/${month}/${year}`
+      });
+    }
+
+    if (noRecordDetected) {
+      console.log('No job items found (page shows "No record found").');
+      return res.json({
+        status: 'success',
+        message: 'No job items found',
+        itemCount: 0,
+        fromDate: `${day}/${month}/${year}`
+      });
+    }
+
+    // If we get here, we timed out waiting for either condition
+    console.warn('Timeout waiting for search results or no-record message.');
+    return res.status(504).json({
+      status: 'error',
+      message: 'Timeout waiting for search results',
+      itemCount: 0,
+      fromDate: `${day}/${month}/${year}`
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// route to select IGH from the dropdown; fill date to 1 week ago - for NSIR only
+router.post("/fill-job-payment-tableNISR", async (req, res) => {
+  try {
+    page = getPage();
+
+    const frameElement = await page.waitForSelector('iframe.frame__webview', {
+      state: 'attached',
+      timeout: 10000
+    });
+
+    const frame = await frameElement.contentFrame();
+
+    if (!frame) {
+      throw new Error('Could not access iframe content');
+    }
+
+    await frame.waitForSelector('select[name="invoiceType"]', {
+      state: 'visible',
+      timeout: 10000
+    });
+
+    await frame.waitForTimeout(500);
+
+    await frame.selectOption('select[name="invoiceType"]', 'NISR');
+    await frame.waitForTimeout(500);
+
+    // Date logic: one week ago
+    const today = new Date();
+    const oneWeekAgo = new Date(today);
+    oneWeekAgo.setDate(today.getDate() - 7);
+
+    const day = String(oneWeekAgo.getDate()).padStart(2, '0');
+    const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
+    const year = String(oneWeekAgo.getFullYear());
+
+    await frame.fill('input[name="fDD"]', day);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="fMM"]', month);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="fYYYY"]', year);
+
+    await frame.waitForTimeout(500);
+
+    // submit
+    await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
+
+    // Wait up to timeout for either details links OR the "No record found" error text.
+    const timeout = 10000; // ms
+    const pollInterval = 500; // ms
+    const start = Date.now();
+
+    let detailsCount = 0;
+    let noRecordDetected = false;
+
+    while (Date.now() - start < timeout) {
+      // count doesn't throw; it's safe to call repeatedly
+      detailsCount = await frame.locator('a:has-text("Detail Information")').count();
+      // detect the common error text shown in the HTML you pasted
+      const noRecordCount = await frame.locator('text=No record found').count();
+
+      if (detailsCount > 0) {
+        break; // found results
+      }
+
+      if (noRecordCount > 0) {
+        noRecordDetected = true;
+        break; // explicit "no record" shown on page
+      }
+
+      // small wait before next check
+      await frame.waitForTimeout(pollInterval);
+    }
+
+    // Decide response based on what we observed
+    if (detailsCount > 0) {
+      console.log(`Found ${detailsCount} job items with Details links`);
+      return res.json({
+        status: 'success',
+        message: 'Search completed',
+        itemCount: detailsCount,
+        fromDate: `${day}/${month}/${year}`
+      });
+    }
+
+    if (noRecordDetected) {
+      console.log('No job items found (page shows "No record found").');
+      return res.json({
+        status: 'success',
+        message: 'No job items found',
+        itemCount: 0,
+        fromDate: `${day}/${month}/${year}`
+      });
+    }
+
+    // If we get here, we timed out waiting for either condition
+    console.warn('Timeout waiting for search results or no-record message.');
+    return res.status(504).json({
+      status: 'error',
+      message: 'Timeout waiting for search results',
+      itemCount: 0,
+      fromDate: `${day}/${month}/${year}`
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
 });
 
 // Click a specific "Details" link by index
@@ -226,7 +473,6 @@ router.post("/click-job-item", async (req, res) => {
         res.status(500).json({ status: 'error', message: err.message });
     }
 });
-
 
 // route to download and rename pdf files
 router.post("/download-and-rename-pdf", async (req, res) => {
@@ -317,4 +563,25 @@ router.post("/download-and-rename-pdf", async (req, res) => {
         res.status(500).json({ status: 'error', message: err.message });
     }
 });
+
+// route to delete all files in the local folder
+router.delete('/delete-files', async (req, res) => {
+  try {
+    const downloadPath = 'C:\\Intern\\Test IGH';
+    const files = fs.readdirSync(downloadPath);
+
+    for (const file of files) {
+      const filePath = path.join(downloadPath, file);
+      if (fs.lstatSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(200).json({ message: 'All files deleted successfully.' });
+  } catch (error) {
+    console.error('Error deleting files:', error);
+    res.status(500).json({ error: 'Failed to delete files.' });
+  }
+});
+
 module.exports = router;

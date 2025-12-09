@@ -33,6 +33,12 @@ function getGoogleAuthCode() {
         (hmac[offset + 3] & 0xff)
     ) % 1000000;
     
-    return code.toString().padStart(6, '0');
+    const secondsRemaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+    
+    return {
+        code: code.toString().padStart(6, '0'),
+        secondsRemaining: secondsRemaining
+    };
 }
+
 module.exports = { getGoogleAuthCode };
