@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, cleanup, launchAndGoto} = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto, checkPageWithRetry} = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -19,6 +19,7 @@ router.post('/stop-chromium', async (req, res) => {
 router.post("/fill-login-details", async (req, res) => {
     try {
         const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
+        await checkPageWithRetry(3);
         const page = getPage();
         
         // Check timing BEFORE starting login
@@ -158,7 +159,8 @@ router.post("/fill-login-details", async (req, res) => {
 // route to click on others
 router.post("/click-others", async (req, res) => {
     try {
-        page = getPage();
+        await checkPageWithRetry(3);
+        const page = getPage();
         let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
         await page.locator(otherSelector).click()
         res.status(200).send({ status: "success" });
@@ -172,7 +174,8 @@ router.post("/click-others", async (req, res) => {
 // route to click on supplier management
 router.post("/click-supplier-management", async (req, res) => {
     try {
-        page = getPage();
+        await checkPageWithRetry(3);
+        const page = getPage();
         let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
         await page.locator(supplierManagamentSelector).click()
         res.status(200).send({ status: "success" });
@@ -186,8 +189,8 @@ router.post("/click-supplier-management", async (req, res) => {
 // route to click on enquire LD/NSIR invoice under payment advice
 router.post("/click-enquire-invoice", async (req, res) => {
     try {
-        page = getPage();
-        
+        await checkPageWithRetry(3);
+        const page = getPage();
         // Get the iframe
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
             state: 'attached', 
@@ -213,7 +216,8 @@ router.post("/click-enquire-invoice", async (req, res) => {
 // route to select IGH from the dropdown; fill date to 1 week ago - for LD only
 router.post("/fill-job-payment-tableLD", async (req, res) => {
   try {
-    page = getPage();
+    await checkPageWithRetry(3);
+    const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
       state: 'attached',
@@ -321,7 +325,8 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
 // route to select IGH from the dropdown; fill date to 1 week ago - for NSIR only
 router.post("/fill-job-payment-tableNISR", async (req, res) => {
   try {
-    page = getPage();
+    await checkPageWithRetry(3);
+    const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
       state: 'attached',
@@ -431,7 +436,8 @@ router.post("/click-job-item", async (req, res) => {
     try {
         const { index } = req.body; // 0 = first Details, 1 = second, 2 = third
         
-        page = getPage();
+        await checkPageWithRetry(3);
+        const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
             state: 'attached', 
@@ -479,7 +485,8 @@ router.post("/download-and-rename-pdf", async (req, res) => {
     try {
         const { index } = req.body; // Get index from request (0, 1, 2)
         
-        page = getPage();
+        await checkPageWithRetry(3);
+        const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
             state: 'attached', 
