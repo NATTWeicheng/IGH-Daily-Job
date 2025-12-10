@@ -5,7 +5,7 @@ let context = null;
 let page = null;
 let lastUsedUrl = null;
 
-// Check if browser is active
+// Check if there is a running browser and an open page
 function isBrowserActive() {
     return browser && browser.isConnected && browser.isConnected() && page && !page.isClosed();
 }
@@ -18,13 +18,11 @@ async function launchAndGoto(url) {
 
         // If browser is already active, just navigate
         if (isBrowserActive()) {
-            console.log('Browser already running, navigating to:', url);
             await page.goto(url, { waitUntil: 'networkidle' });
             return { status: 'success', message: 'Navigated to page' };
         }
 
         // Launch new browser
-        console.log('Launching new browser...');
         browser = await chromium.launch({ 
             headless: false,
             args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -42,7 +40,7 @@ async function launchAndGoto(url) {
     }
 }
 
-// Get page instance (with validation)
+// Get page instance
 function getPage() {
     if (!page || page.isClosed()) {
         throw new Error('Page is not available. Please launch browser first using /fill-login-details');
@@ -50,7 +48,7 @@ function getPage() {
     return page;
 }
 
-// Get browser instance (with validation)
+// Get browser instance
 function getBrowser() {
     if (!browser || (browser.isConnected && !browser.isConnected())) {
         return null;

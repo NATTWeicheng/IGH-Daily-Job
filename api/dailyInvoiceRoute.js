@@ -31,13 +31,11 @@ router.post("/fill-login-details", async (req, res) => {
         let authResult = getGoogleAuthCode();
         console.log(`Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
         
-        // If less than 15 seconds, wait for fresh code BEFORE logging in
+        // If less than 15 seconds, wait for fresh code
         if (authResult.secondsRemaining < 15) {
-            console.log('Not enough time for login flow, waiting for fresh code window...');
             const waitTime = (authResult.secondsRemaining + 2) * 1000;
             await page.waitForTimeout(waitTime);
             authResult = getGoogleAuthCode();
-            console.log(`Fresh code ready: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
         }
         
         // Fill username
@@ -94,12 +92,8 @@ router.post("/fill-login-details", async (req, res) => {
             }
         }
         
-        console.log(`Submitting 2FA code: ${authResult.code}`);
-        
         // Click continue
         await page.locator('#Continue').click();
-        
-        console.log('Waiting for response...');
         
         // Wait a bit for processing
         await page.waitForTimeout(3000);
@@ -113,43 +107,6 @@ router.post("/fill-login-details", async (req, res) => {
         if (errorCount > 0) {
             const errorText = await page.locator('text=/invalid|incorrect|wrong|error/i').first().textContent();
             throw new Error(`2FA Error: ${errorText}`);
-        }
-        
-        // Try multiple selectors for dashboard
-        const dashboardSelectors = [
-            'div.slidebar',
-            '.main-content',
-            'app-container-group',
-            '[class*="dashboard"]'
-        ];
-        
-        let dashboardFound = false;
-        for (const selector of dashboardSelectors) {
-            const count = await page.locator(selector).count();
-            if (count > 0) {
-                console.log(`✓ Dashboard found with selector: ${selector}`);
-                dashboardFound = true;
-                break;
-            }
-        }
-        
-        if (!dashboardFound) {
-            // Maybe we're on a different page but login succeeded?
-            if (!currentUrl.includes('login') && !currentUrl.includes('auth')) {
-                console.log('✓ URL changed from auth page - assuming login success');
-                dashboardFound = true;
-            }
-        }
-        
-        if (dashboardFound) {
-            res.json({ 
-                status: 'success',
-                message: 'Login completed successfully',
-                codeUsed: authResult.code,
-                url: currentUrl
-            });
-        } else {
-            throw new Error(`Dashboard not found. URL: ${currentUrl}`);
         }
 
     } catch (err) {

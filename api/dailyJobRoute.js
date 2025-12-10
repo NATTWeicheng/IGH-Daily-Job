@@ -114,43 +114,6 @@ router.post("/fill-login-details", async (req, res) => {
             const errorText = await page.locator('text=/invalid|incorrect|wrong|error/i').first().textContent();
             throw new Error(`2FA Error: ${errorText}`);
         }
-        
-        // Try multiple selectors for dashboard
-        const dashboardSelectors = [
-            'div.slidebar',
-            '.main-content',
-            'app-container-group',
-            '[class*="dashboard"]'
-        ];
-        
-        let dashboardFound = false;
-        for (const selector of dashboardSelectors) {
-            const count = await page.locator(selector).count();
-            if (count > 0) {
-                console.log(`✓ Dashboard found with selector: ${selector}`);
-                dashboardFound = true;
-                break;
-            }
-        }
-        
-        if (!dashboardFound) {
-            // Maybe we're on a different page but login succeeded?
-            if (!currentUrl.includes('login') && !currentUrl.includes('auth')) {
-                console.log('✓ URL changed from auth page - assuming login success');
-                dashboardFound = true;
-            }
-        }
-        
-        if (dashboardFound) {
-            res.json({ 
-                status: 'success',
-                message: 'Login completed successfully',
-                codeUsed: authResult.code,
-                url: currentUrl
-            });
-        } else {
-            throw new Error(`Dashboard not found. URL: ${currentUrl}`);
-        }
 
     } catch (err) {
         console.error('Login error:', err);
