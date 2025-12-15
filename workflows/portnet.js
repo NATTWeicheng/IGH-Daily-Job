@@ -80,57 +80,26 @@ async function cleanup() {
     }
 }
 
-function setLastUsedUrl(url) {
-    lastUsedUrl = url;
+// Creates a standardized error response
+function errorResponse(step, error, additionalInfo = {}) {
+    return {
+        status: 'error',
+        step: step,
+        errorType: error.name || 'UnknownError',
+        message: error.message || 'An error occurred',
+        timestamp: new Date().toISOString(),
+        ...additionalInfo
+    };
 }
 
-// Check if page is responsive / not frozen
-// This runs a tiny evaluation and races with a timeout.
-async function isPageResponsive(timeoutMs = 2000) {
-    if (!page || page.isClosed()) {
-        return { ok: false, reason: 'Page is not available' };
-    }
-
-    try {
-        await Promise.race([
-            page.evaluate(() => true),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Page timeout')), timeoutMs))
-        ]);
-        return { ok: true };
-    } catch (err) {
-        return { ok: false, reason: err.message || 'Page unresponsive' };
-    }
-}
-
-// Automatically detect frozen page, cleanup, relaunch, and retry.
-async function checkPageWithRetry(maxRetries = 3, delayMs = 1000) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-
-        const status = await isPageResponsive();
-
-        if (status.ok) {
-            return true; // Page is working
-        }
-
-        console.warn(
-            `⚠ Page unresponsive (Attempt ${attempt}/${maxRetries}) – Reason: ${status.reason}`
-        );
-
-        // Cleanup frozen browser/page
-        await cleanup();
-
-        if (!lastUsedUrl) {
-            throw new Error("Page is dead and no lastUsedUrl was set to relaunch.");
-        }
-
-        // Delay before retrying
-        await new Promise(res => setTimeout(res, delayMs));
-
-        console.log(`🔄 Relaunching browser and navigating to ${lastUsedUrl}...`);
-        await launchAndGoto(lastUsedUrl);
-    }
-
-    throw new Error(`Page unresponsive after ${maxRetries} retries.`);
+// success route run
+function successResponse(step, data = {}) {
+    return {
+        status: 'success',
+        step: step,
+        timestamp: new Date().toISOString(),
+        ...data
+    };
 }
 
 module.exports = { 
@@ -139,7 +108,6 @@ module.exports = {
     launchAndGoto,
     cleanup,
     isBrowserActive,
-    isPageResponsive,
-    setLastUsedUrl,
-    checkPageWithRetry
+    errorResponse,
+    successResponse
 };

@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, getBrowser, launchAndGoto, checkPageWithRetry} = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser } = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -8,15 +8,15 @@ const fs = require('fs');
 // kill chronium
 router.post('/stop-chromium', async (req, res) => {
   try {
-    const browser = getBrowser(); // Get the browser instance
+    const browser = getBrowser();
     if (browser) {
       await browser.close();
-      res.json({ success: true, message: 'Browser closed successfully' });
+      res.status(200).json(successResponse('stop-chromium', { message: 'Browser closed successfully' }));
     } else {
-      res.json({ success: false, message: 'No browser instance running' });
+      res.status(200).json(successResponse('stop-chromium', { message: 'No browser instance running' }));
     }
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(200).json(errorResponse('stop-chromium', error));
   }
 }); 
 
@@ -24,7 +24,7 @@ router.post('/stop-chromium', async (req, res) => {
 router.post("/fill-login-details", async (req, res) => {
     try {
         const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
-        await checkPageWithRetry(3);
+        
         const page = getPage();
         
         // Check timing BEFORE starting login
@@ -109,70 +109,76 @@ router.post("/fill-login-details", async (req, res) => {
             throw new Error(`2FA Error: ${errorText}`);
         }
 
+        return res.status(200).json(successResponse('fill-login-details', {
+            message: 'Login and 2FA completed successfully'
+        }));
+
     } catch (err) {
         console.error('Login error:', err);
-        res.status(500).json({ 
-            status: 'error', 
-            message: err.message 
-        });
+        return res.status(200).json(errorResponse('fill-login-details', err));
     }
 });
 
 // route to click on others
 router.post("/click-others", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
-
-        // Selector for "other"
         let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
-
-        // Click on the button
         await page.locator(otherSelector).click()
-        res.status(200).send({ status: "success" });
+        
+        // Verify: Wait for panel to be visible
+        await page.waitForSelector('.lv2-panel', { state: 'visible', timeout: 5000 });
+        
+        res.status(200).json(successResponse('click-others', { message: 'Clicked Others successfully' }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-others', err));
     }
 });
 
 // route to click on supplier management
 router.post("/click-supplier-management", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
-
-        // Selector for Supplier Management Button
         let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
-        
-        // Click on the button
         await page.locator(supplierManagamentSelector).click()
-        res.status(200).send({ status: "success" });
+        
+        // Verify: Wait for iframe to appear
+        await page.waitForSelector('iframe.frame__webview', { 
+            state: 'visible', 
+            timeout: 10000 
+        });
+        
+        res.status(200).json(successResponse('click-supplier-management', { message: 'Clicked Supplier Management successfully' }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-supplier-management', err));
     }
 });
 
 // route to click on enquire job payment under payment advice
 router.post("/click-job-payment", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         
         // Get the iframe
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
             state: 'attached', 
-            timeout: 10000 
+            timeout: 15000
         });
+        
+        await page.waitForTimeout(1000);
         
         const frame = await frameElement.contentFrame();
         
         if (!frame) {
             throw new Error('Could not access iframe content');
         }
+        
+        // Wait for iframe content to load
+        await frame.waitForLoadState('domcontentloaded', { timeout: 10000 });
         
         // Wait for "PAYMENT MODULES" to appear in the iframe
         await frame.waitForSelector('text=PAYMENT MODULES', { 
@@ -183,18 +189,23 @@ router.post("/click-job-payment", async (req, res) => {
         // Click the link inside the iframe
         await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initJobPaymentEnquiryID"]').click();
         
-        res.json({ status: 'success', message: 'Clicked Enquire Job Payment' });
+        // Verify: Wait for the form to load
+        await frame.waitForSelector('select[name="jobTy"]', { 
+            state: 'visible', 
+            timeout: 10000 
+        });
+        
+        res.status(200).json(successResponse('click-job-payment', { message: 'Clicked Enquire Job Payment and verified form loaded' }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-job-payment', err));
     }
 });
 
 // route to select IGH from the dropdown
 router.post("/fill-job-payment-table", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -207,6 +218,7 @@ router.post("/fill-job-payment-table", async (req, res) => {
         if (!frame) {
             throw new Error('Could not access iframe content');
         }
+        
         // Select job type as IGH
         await frame.waitForSelector('select[name="jobTy"]', { 
             state: 'visible', 
@@ -229,7 +241,6 @@ router.post("/fill-job-payment-table", async (req, res) => {
         // Date logic
         const today = new Date();
         const threeDaysAgo = new Date(today);
-        // Set the date to 3 days before current date
         threeDaysAgo.setDate(today.getDate() - 3);
         
         const day = String(threeDaysAgo.getDate()).padStart(2, '0');
@@ -263,30 +274,28 @@ router.post("/fill-job-payment-table", async (req, res) => {
         
         await frame.waitForTimeout(1000);
         
-        // Get ONLY the rows with "Details" links (the actual job rows)
+        // Get ONLY the rows with "Details" links
         const detailsLinks = await frame.locator('a:has-text("Details")').all();
         
         console.log(`Found ${detailsLinks.length} job items with Details links`);
         
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('fill-job-payment-table', { 
             message: 'Search completed',
-            itemCount: detailsLinks.length, // This will be 3!
+            itemCount: detailsLinks.length,
             fromDate: `${day}/${month}/${year}`
-        });
+        }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('fill-job-payment-table', err));
     }
 });
 
 // Click a specific "Details" link by index
 router.post("/click-job-item", async (req, res) => {
     try {
-        const { index } = req.body; // 0 = first Details, 1 = second, 2 = third
+        const { index } = req.body;
         
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -316,30 +325,27 @@ router.post("/click-job-item", async (req, res) => {
         // Click the specific Details link
         await detailsLinks[index].click();
         
-        await frame.waitForTimeout(2000); // Wait for the details page to load
+        await frame.waitForTimeout(2000);
         
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('click-job-item', { 
             message: `Clicked Details link at index ${index}`,
             index: index
-        });
+        }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-job-item', err, { requestedIndex: req.body.index }));
     }
 });
-
 
 // route to click on the summary after clicking on detail
 router.post("/click-summary-of-igh-moves", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
             state: 'attached', 
-            timeout: 1500 
+            timeout: 10000
         });
         
         const frame = await frameElement.contentFrame();
@@ -348,25 +354,35 @@ router.post("/click-summary-of-igh-moves", async (req, res) => {
             throw new Error('Could not access iframe content');
         }
 
+        // Wait for the link to be visible
+        await frame.waitForSelector('a:has-text("Summary of IGH Moves")', {
+            state: 'visible',
+            timeout: 10000
+        });
+
         await frame.click('a:has-text("Summary of IGH Moves")');
         
-        res.json({ 
-            status: 'success', 
-            message: 'Successfully clicked "Summary of IGH Moves" link'
+        // Verify: Wait for download button to appear
+        await frame.waitForSelector('input[type="submit"][value="Download To Excel"]', {
+            state: 'visible',
+            timeout: 10000
         });
+        
+        res.status(200).json(successResponse('click-summary-of-igh-moves', { 
+            message: 'Successfully clicked "Summary of IGH Moves" link and verified page loaded'
+        }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-summary-of-igh-moves', err));
     }
 });
 
 // route to download and rename excel files
 router.post("/download-and-rename-excel", async (req, res) => {
     try {
-        const { index } = req.body; // Get index from request (0, 1, 2)
+        const { index } = req.body;
         
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -433,25 +449,23 @@ router.post("/download-and-rename-excel", async (req, res) => {
         
         await frame.waitForTimeout(1000);
         
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('download-and-rename-excel', { 
             message: 'Successfully downloaded and renamed Excel file',
             fileName: newFileName,
             filePath: filePath,
             index: index,
             fileNumber: fileNumber
-        });
+        }));
 
     } catch (err) {
         console.error('Download error:', err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('download-and-rename-excel', err));
     }
 });
 
 // route to click back button from the excel download page
 router.post("/click-back-button1", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -479,21 +493,19 @@ router.post("/click-back-button1", async (req, res) => {
         // Wait for navigation to complete
         await frame.waitForTimeout(1000);
         
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('click-back-button1', { 
             message: 'Successfully clicked Back button'
-        });
+        }));
 
     } catch (err) {
         console.error('Back button click error:', err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-back-button1', err));
     }
 });
 
 // route to click back button from the summary selection page
 router.post("/click-back-button2", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -523,15 +535,35 @@ router.post("/click-back-button2", async (req, res) => {
         // Wait for navigation to complete
         await frame.waitForTimeout(1000);
         
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('click-back-button2', { 
             message: 'Successfully clicked Back button from summary page'
-        });
+        }));
 
     } catch (err) {
         console.error('Back button click error:', err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-back-button2', err));
     }
+});
+
+
+// route to delete all files in the local folder
+router.delete('/delete-files', async (req, res) => {
+  try {
+    const downloadPath = 'C:\\Intern\\Test IGH';
+    const files = fs.readdirSync(downloadPath);
+
+    for (const file of files) {
+      const filePath = path.join(downloadPath, file);
+      if (fs.lstatSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(200).json(successResponse('delete-files', { message: 'All files deleted successfully.' }));
+  } catch (error) {
+    console.error('Error deleting files:', error);
+    res.status(200).json(errorResponse('delete-files', error));
+  }
 });
 
 module.exports = router;

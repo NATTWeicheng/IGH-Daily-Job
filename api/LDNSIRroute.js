@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, cleanup, launchAndGoto, checkPageWithRetry} = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto, errorResponse, successResponse } = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -9,9 +9,9 @@ const fs = require('fs');
 router.post('/stop-chromium', async (req, res) => {
   try {
     await cleanup();
-    res.json({ success: true, message: 'Browser closed successfully' });
+    res.status(200).json(successResponse('stop-chromium', { message: 'Browser closed successfully' }));
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(200).json(errorResponse('stop-chromium', error));
   }
 }); 
 
@@ -19,7 +19,7 @@ router.post('/stop-chromium', async (req, res) => {
 router.post("/fill-login-details", async (req, res) => {
     try {
         const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
-        await checkPageWithRetry(3);
+        
         const page = getPage();
         
         // Check timing BEFORE starting login
@@ -89,8 +89,6 @@ router.post("/fill-login-details", async (req, res) => {
             }
         }
         
-        console.log(`Submitting 2FA code: ${authResult.code}`);
-        
         // Click continue
         await page.locator('#Continue').click();
         
@@ -110,76 +108,106 @@ router.post("/fill-login-details", async (req, res) => {
             throw new Error(`2FA Error: ${errorText}`);
         }
 
+        return res.status(200).json(successResponse('fill-login-details', {
+            message: 'Login and 2FA completed successfully'
+        }));
+
     } catch (err) {
         console.error('Login error:', err);
-        res.status(500).json({ 
-            status: 'error', 
-            message: err.message 
-        });
+        return res.status(200).json(errorResponse('fill-login-details', err));
     }
 });
 
 // route to click on others
 router.post("/click-others", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
         await page.locator(otherSelector).click()
-        res.status(200).send({ status: "success" });
+        
+        // Verify: Wait for panel to be visible
+        await page.waitForSelector('.lv2-panel', { state: 'visible', timeout: 5000 });
+        
+        res.status(200).json(successResponse('click-others', { message: 'Clicked Others successfully' }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-others', err));
     }
 });
 
 // route to click on supplier management
 router.post("/click-supplier-management", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
         let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
         await page.locator(supplierManagamentSelector).click()
-        res.status(200).send({ status: "success" });
+        
+        // Verify: Wait for iframe to appear
+        await page.waitForSelector('iframe.frame__webview', { 
+            state: 'visible', 
+            timeout: 10000 
+        });
+        
+        res.status(200).json(successResponse('click-supplier-management', { message: 'Clicked Supplier Management successfully' }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-supplier-management', err));
     }
 });
 
 // route to click on enquire LD/NSIR invoice under payment advice
 router.post("/click-enquire-invoice", async (req, res) => {
     try {
-        await checkPageWithRetry(3);
         const page = getPage();
-        // Get the iframe
+        
+        // Wait for iframe
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
             state: 'attached', 
-            timeout: 10000 
+            timeout: 15000
         });
+        
+        // Wait for iframe to be ready
+        await page.waitForTimeout(1000);
         
         const frame = await frameElement.contentFrame();
         
         if (!frame) {
             throw new Error('Could not access iframe content');
         }
-        // Click the link inside the iframe
+        
+        // Wait for iframe content to load
+        await frame.waitForLoadState('domcontentloaded', { timeout: 10000 });
+        
+        // Wait for link to be visible
+        await frame.waitForSelector('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initNisrLdInvoiceEnqID"]', {
+            state: 'visible',
+            timeout: 10000
+        });
+        
+        // Click the link
         await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initNisrLdInvoiceEnqID"]').click();
         
-        res.json({ status: 'success', message: 'Clicked Enquire LD/NSIR Invoice' });
+        // Verify next page loaded
+        await frame.waitForSelector('select[name="invoiceType"]', { 
+            state: 'visible', 
+            timeout: 10000 
+        });
+        
+        res.status(200).json(successResponse('click-enquire-invoice', { 
+            message: 'Clicked Enquire LD/NSIR Invoice and verified form loaded'
+        }));
 
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        console.error('click-enquire-invoice error:', err);
+        res.status(200).json(errorResponse('click-enquire-invoice', err));
     }
 });
 
 // route to select IGH from the dropdown; fill date to 1 week ago - for LD only
 router.post("/fill-job-payment-tableLD", async (req, res) => {
   try {
-    await checkPageWithRetry(3);
     const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
@@ -224,71 +252,58 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
     await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
 
     // Wait up to timeout for either details links OR the "No record found" error text.
-    const timeout = 10000; // ms
-    const pollInterval = 500; // ms
+    const timeout = 10000;
+    const pollInterval = 500;
     const start = Date.now();
 
     let detailsCount = 0;
     let noRecordDetected = false;
 
     while (Date.now() - start < timeout) {
-      // count doesn't throw; it's safe to call repeatedly
       detailsCount = await frame.locator('a:has-text("Detail Information")').count();
-      // detect the common error text shown in the HTML you pasted
       const noRecordCount = await frame.locator('text=No record found').count();
 
       if (detailsCount > 0) {
-        break; // found results
+        break;
       }
 
       if (noRecordCount > 0) {
         noRecordDetected = true;
-        break; // explicit "no record" shown on page
+        break;
       }
 
-      // small wait before next check
       await frame.waitForTimeout(pollInterval);
     }
 
-    // Decide response based on what we observed
     if (detailsCount > 0) {
       console.log(`Found ${detailsCount} job items with Details links`);
-      return res.json({
-        status: 'success',
+      return res.status(200).json(successResponse('fill-job-payment-tableLD', {
         message: 'Search completed',
         itemCount: detailsCount,
         fromDate: `${day}/${month}/${year}`
-      });
+      }));
     }
 
     if (noRecordDetected) {
       console.log('No job items found (page shows "No record found").');
-      return res.json({
-        status: 'success',
+      return res.status(200).json(successResponse('fill-job-payment-tableLD', {
         message: 'No job items found',
         itemCount: 0,
         fromDate: `${day}/${month}/${year}`
-      });
+      }));
     }
 
-    // If we get here, we timed out waiting for either condition
     console.warn('Timeout waiting for search results or no-record message.');
-    return res.status(504).json({
-      status: 'error',
-      message: 'Timeout waiting for search results',
-      itemCount: 0,
-      fromDate: `${day}/${month}/${year}`
-    });
+    throw new Error('Timeout waiting for search results');
   } catch (err) {
     console.error(err);
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(200).json(errorResponse('fill-job-payment-tableLD', err));
   }
 });
 
 // route to select IGH from the dropdown; fill date to 1 week ago - for NSIR only
 router.post("/fill-job-payment-tableNISR", async (req, res) => {
   try {
-    await checkPageWithRetry(3);
     const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
@@ -332,74 +347,60 @@ router.post("/fill-job-payment-tableNISR", async (req, res) => {
     // submit
     await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
 
-    // Wait up to timeout for either details links OR the "No record found" error text.
-    const timeout = 10000; // ms
-    const pollInterval = 500; // ms
+    const timeout = 10000;
+    const pollInterval = 500;
     const start = Date.now();
 
     let detailsCount = 0;
     let noRecordDetected = false;
 
     while (Date.now() - start < timeout) {
-      // count doesn't throw; it's safe to call repeatedly
       detailsCount = await frame.locator('a:has-text("Detail Information")').count();
-      // detect the common error text shown in the HTML you pasted
       const noRecordCount = await frame.locator('text=No record found').count();
 
       if (detailsCount > 0) {
-        break; // found results
+        break;
       }
 
       if (noRecordCount > 0) {
         noRecordDetected = true;
-        break; // explicit "no record" shown on page
+        break;
       }
 
-      // small wait before next check
       await frame.waitForTimeout(pollInterval);
     }
 
-    // Decide response based on what we observed
     if (detailsCount > 0) {
       console.log(`Found ${detailsCount} job items with Details links`);
-      return res.json({
-        status: 'success',
+      return res.status(200).json(successResponse('fill-job-payment-tableNISR', {
         message: 'Search completed',
         itemCount: detailsCount,
         fromDate: `${day}/${month}/${year}`
-      });
+      }));
     }
 
     if (noRecordDetected) {
       console.log('No job items found (page shows "No record found").');
-      return res.json({
-        status: 'success',
+      return res.status(200).json(successResponse('fill-job-payment-tableNISR', {
         message: 'No job items found',
         itemCount: 0,
         fromDate: `${day}/${month}/${year}`
-      });
+      }));
     }
 
-    // If we get here, we timed out waiting for either condition
     console.warn('Timeout waiting for search results or no-record message.');
-    return res.status(504).json({
-      status: 'error',
-      message: 'Timeout waiting for search results',
-      itemCount: 0,
-      fromDate: `${day}/${month}/${year}`
-    });
+    throw new Error('Timeout waiting for search results');
   } catch (err) {
     console.error(err);
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(200).json(errorResponse('fill-job-payment-tableNISR', err));
   }
 });
 
 // Click a specific "Details" link by index
 router.post("/click-job-item", async (req, res) => {
     try {
-        const { index } = req.body; // 0 = first Details, 1 = second, 2 = third
+        const { index } = req.body;
         
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -413,42 +414,36 @@ router.post("/click-job-item", async (req, res) => {
             throw new Error('Could not access iframe content');
         }
         
-        // Wait for Details links
         await frame.waitForSelector('a:has-text("Detail Information")', { 
             state: 'visible', 
             timeout: 10000 
         });
         
-        // Get all Details links
         const detailsLinks = await frame.locator('a:has-text("Detail Information")').all();
         
         if (index >= detailsLinks.length) {
             throw new Error(`Index ${index} out of range. Only ${detailsLinks.length} Details links available.`);
         }
         
-        // Click the specific Details link
         await detailsLinks[index].click();
+        await frame.waitForTimeout(2000);
         
-        await frame.waitForTimeout(2000); // Wait for the details page to load
-        
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('click-job-item', { 
             message: `Clicked Details link at index ${index}`,
             index: index
-        });
+        }));
 
     } catch (err) {
         console.error(err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('click-job-item', err, { requestedIndex: req.body.index }));
     }
 });
 
 // route to download and rename pdf files
 router.post("/download-and-rename-pdf", async (req, res) => {
     try {
-        const { index } = req.body; // Get index from request (0, 1, 2)
+        const { index } = req.body;
         
-        await checkPageWithRetry(3);
         const page = getPage();
         
         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
@@ -464,10 +459,8 @@ router.post("/download-and-rename-pdf", async (req, res) => {
         
         await frame.waitForTimeout(500);
         
-        // Extract invoice number from the page
         let invoiceNumber = 'unknown';
         try {
-            // Try to find the invoice number in the iframe
             const invoiceText = await frame.textContent('body');
             const invoiceMatch = invoiceText.match(/Invoice No\s*:(\w+)/);
             
@@ -483,16 +476,13 @@ router.post("/download-and-rename-pdf", async (req, res) => {
             invoiceNumber = `invoice_${index + 1}`;
         }
         
-        // Use invoice number as filename
         const newFileName = `${invoiceNumber}.pdf`;
         
         console.log(`Downloading page as PDF and saving as: ${newFileName}`);
         
-        // Save to file - define path
         const downloadPath = 'C:\\Intern\\Test IGH';
         const filePath = path.join(downloadPath, newFileName);
         
-        // Generate PDF directly from the page
         await page.pdf({
             path: filePath,
             format: 'A4',
@@ -505,7 +495,6 @@ router.post("/download-and-rename-pdf", async (req, res) => {
             }
         });
         
-        // go back to the previous page in order to download next file
         if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
             try {
                 await page.goBack({ waitUntil: 'load', timeout: 5000 }).catch(() => null);
@@ -519,18 +508,17 @@ router.post("/download-and-rename-pdf", async (req, res) => {
         
         await frame.waitForTimeout(1000);
         
-        res.json({ 
-            status: 'success', 
+        res.status(200).json(successResponse('download-and-rename-pdf', { 
             message: 'Successfully downloaded page as PDF',
             fileName: newFileName,
             filePath: filePath,
             index: index,
             invoiceNumber: invoiceNumber
-        });
+        }));
 
     } catch (err) {
         console.error('PDF download error:', err);
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(200).json(errorResponse('download-and-rename-pdf', err));
     }
 });
 
@@ -547,10 +535,10 @@ router.delete('/delete-files', async (req, res) => {
       }
     }
 
-    res.status(200).json({ message: 'All files deleted successfully.' });
+    res.status(200).json(successResponse('delete-files', { message: 'All files deleted successfully.' }));
   } catch (error) {
     console.error('Error deleting files:', error);
-    res.status(500).json({ error: 'Failed to delete files.' });
+    res.status(200).json(errorResponse('delete-files', error));
   }
 });
 
