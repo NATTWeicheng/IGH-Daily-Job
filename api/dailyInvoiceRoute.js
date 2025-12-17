@@ -186,10 +186,108 @@ router.post("/click-enquire-invoice", async (req, res) => {
     }
 });
 
+
+// comment out route 1 and uncomment route 2 for custom test date
+// comment out route 2 and uncomment route 1 for everyday runs
 // route to select IGH from the dropdown; click accepted and fill date to 1 day ago
+// DO NOT DELETE
+// route 1; 
+// router.post("/fill-job-payment-table", async (req, res) => {
+//     try {
+        
+//         const page = getPage();
+        
+//         // Iframe selector
+//         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
+//             state: 'attached', 
+//             timeout: 10000 
+//         });
+        
+//         const frame = await frameElement.contentFrame();
+        
+//         if (!frame) {
+//             throw new Error('Could not access iframe content');
+//         }
+        
+//         // Select Job Type as IGH
+//         await frame.waitForSelector('select[name="jobType"]', { 
+//             state: 'visible', 
+//             timeout: 10000 
+//         });
+        
+//         await frame.waitForTimeout(500);
+        
+//         await frame.selectOption('select[name="jobType"]', 'IGH');
+//         await frame.waitForTimeout(500);
+        
+//         // Check accepted radio button
+//         await frame.waitForSelector('input[name="accepted"][value="Y"]', {
+//             state: 'visible',
+//             timeout: 5000
+//         });
+//         await frame.click('input[name="accepted"][value="Y"]');
+//         await frame.waitForTimeout(500);
+        
+//         // Date logic
+//         const today = new Date();
+//         const oneDayAgo = new Date(today);
+//         // Get 1 day before current date
+//         oneDayAgo.setDate(today.getDate() - 1);
+        
+//         const day = String(oneDayAgo.getDate()).padStart(2, '0');
+//         const month = String(oneDayAgo.getMonth() + 1).padStart(2, '0');
+//         const year = String(oneDayAgo.getFullYear());
+        
+//         // Fill the from section
+//         await frame.fill('input[name="fDD"]', day);
+//         await frame.waitForTimeout(200);
+//         await frame.fill('input[name="fMM"]', month);
+//         await frame.waitForTimeout(200);
+//         await frame.fill('input[name="fYYYY"]', year);
+        
+//         // Fill the to section
+//         await frame.fill('input[name="tDD"]', day);
+//         await frame.waitForTimeout(200);
+//         await frame.fill('input[name="tMM"]', month);
+//         await frame.waitForTimeout(200);
+//         await frame.fill('input[name="tYYYY"]', year);
+        
+//         await frame.waitForTimeout(500);
+        
+//         // Submit button
+//         await frame.locator('body > form > table > tbody > tr:nth-child(8) > td > input[type=submit]:nth-child(1)').click();
+        
+//         // Wait for the "Details" links to appear
+//         await frame.waitForSelector('a:has-text("Detail Information")', { 
+//             state: 'visible', 
+//             timeout: 10000 
+//         });
+        
+//         await frame.waitForTimeout(1000);
+        
+//         // Get ONLY the rows with "Details" links (the actual job rows)
+//         const detailsLinks = await frame.locator('a:has-text("Detail Information")').all();
+        
+//         console.log(`Found ${detailsLinks.length} job items with Details links`);
+        
+//         res.status(200).json(successResponse('fill-job-payment-table', { 
+//             message: 'Search completed',
+//             itemCount: detailsLinks.length,
+//             fromDate: `${day}/${month}/${year}`
+//         }));
+
+//     } catch (err) {
+//         console.error(err);
+//         res.status(200).json(errorResponse('fill-job-payment-table', err));
+//     }
+// });
+
+// route 2
+// fill table + custom current date
 router.post("/fill-job-payment-table", async (req, res) => {
     try {
-        
+        const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
+
         const page = getPage();
         
         // Iframe selector
@@ -199,22 +297,17 @@ router.post("/fill-job-payment-table", async (req, res) => {
         });
         
         const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
-        }
-        
+        if (!frame) throw new Error('Could not access iframe content');
+
         // Select Job Type as IGH
         await frame.waitForSelector('select[name="jobType"]', { 
             state: 'visible', 
             timeout: 10000 
         });
-        
         await frame.waitForTimeout(500);
-        
         await frame.selectOption('select[name="jobType"]', 'IGH');
         await frame.waitForTimeout(500);
-        
+
         // Check accepted radio button
         await frame.waitForSelector('input[name="accepted"][value="Y"]', {
             state: 'visible',
@@ -222,49 +315,53 @@ router.post("/fill-job-payment-table", async (req, res) => {
         });
         await frame.click('input[name="accepted"][value="Y"]');
         await frame.waitForTimeout(500);
-        
-        // Date logic
-        const today = new Date();
-        const oneDayAgo = new Date(today);
-        // Get 1 day before current date
-        oneDayAgo.setDate(today.getDate() - 1);
-        
-        const day = String(oneDayAgo.getDate()).padStart(2, '0');
-        const month = String(oneDayAgo.getMonth() + 1).padStart(2, '0');
-        const year = String(oneDayAgo.getFullYear());
-        
+
+        // ===== DATE LOGIC =====
+        let baseDate;
+        if (currentDate && currentDate !== 'NO') {
+            const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+            baseDate = new Date(yyyy, mm - 1, dd);
+        } else {
+            baseDate = new Date();
+        }
+
+        // Subtract 1 day
+        baseDate.setDate(baseDate.getDate() - 1);
+
+        const day = String(baseDate.getDate()).padStart(2, '0');
+        const month = String(baseDate.getMonth() + 1).padStart(2, '0');
+        const year = String(baseDate.getFullYear());
+
         // Fill the from section
         await frame.fill('input[name="fDD"]', day);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="fMM"]', month);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="fYYYY"]', year);
-        
+
         // Fill the to section
         await frame.fill('input[name="tDD"]', day);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="tMM"]', month);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="tYYYY"]', year);
-        
+
         await frame.waitForTimeout(500);
-        
+
         // Submit button
         await frame.locator('body > form > table > tbody > tr:nth-child(8) > td > input[type=submit]:nth-child(1)').click();
-        
+
         // Wait for the "Details" links to appear
         await frame.waitForSelector('a:has-text("Detail Information")', { 
             state: 'visible', 
             timeout: 10000 
         });
-        
         await frame.waitForTimeout(1000);
-        
+
         // Get ONLY the rows with "Details" links (the actual job rows)
         const detailsLinks = await frame.locator('a:has-text("Detail Information")').all();
-        
         console.log(`Found ${detailsLinks.length} job items with Details links`);
-        
+
         res.status(200).json(successResponse('fill-job-payment-table', { 
             message: 'Search completed',
             itemCount: detailsLinks.length,
@@ -329,98 +426,75 @@ router.post("/click-job-item", async (req, res) => {
 // route to download and rename pdf files
 router.post("/download-and-rename-pdf", async (req, res) => {
     try {
-        const { index } = req.body; // Get index from request (0, 1, 2)
-        
-        
-        const page = getPage();
-        
-        // Iframe
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
-        });
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
+      const { index } = req.body;
+      const page = getPage();
+  
+      // Wait for iframe
+      const frameElement = await page.waitForSelector("iframe.frame__webview", { state: "attached", timeout: 15000 });
+      const frame = await frameElement.contentFrame();
+      if (!frame) throw new Error("Unable to access iframe");
+  
+      await frame.waitForLoadState("networkidle");
+  
+      // Extract invoice number
+      let invoiceNumber = `invoice_${index + 1}`;
+      try {
+        const text = await frame.textContent("body");
+        const match = text?.match(/Invoice No\s*:?([A-Z0-9]+)/i);
+        if (match) invoiceNumber = match[1].trim();
+      } catch (_) {}
+  
+      const fileName = `${invoiceNumber}.pdf`;
+      const filePath = path.join(process.env.DAILY_INVOICES_PATH, fileName);
+      console.log(`Saving invoice as ${fileName}`);
+  
+      // Hide header/footer and fullscreen iframe
+      await page.addStyleTag({
+        content: `
+          app-header, app-footer { display: none !important; }
+          .app__main-wrapper { display: block !important; }
+          app-frame, iframe.frame__webview {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            border: none !important;
+          }
+          body { margin: 0 !important; overflow: hidden !important; }
+        `
+      });
+  
+      // Generate PDF
+      await page.emulateMedia({ media: "print" });
+      await page.pdf({
+        path: filePath,
+        format: "A4",
+        landscape: true,
+        printBackground: true,
+        scale: 0.95
+      });
+  
+      // Go back for next invoice
+      try {
+        if (page && typeof page.isClosed === "function" && !page.isClosed()) {
+          await page.goBack({ waitUntil: "load", timeout: 5000 }).catch(() => null);
+          await page.waitForTimeout(100);
         }
-        
-        await frame.waitForTimeout(500);
-        
-        // Extract invoice number from the page
-        let invoiceNumber = 'unknown';
-        try {
-            // Try to find the invoice number in the iframe
-            const invoiceText = await frame.textContent('body');
-            const invoiceMatch = invoiceText.match(/Invoice No\s*:(\w+)/);
-            
-            if (invoiceMatch) {
-                invoiceNumber = invoiceMatch[1].trim();
-                console.log(`Found invoice number: ${invoiceNumber}`);
-            } else {
-                console.warn('Invoice number not found, using index-based name');
-                invoiceNumber = `invoice_${index + 1}`;
-            }
-        } catch (extractErr) {
-            console.error('Error extracting invoice number:', extractErr);
-            invoiceNumber = `invoice_${index + 1}`;
-        }
-        
-        // Use invoice number as filename
-        const newFileName = `${invoiceNumber}.pdf`;
-        
-        console.log(`Downloading page as PDF and saving as: ${newFileName}`);
-        
-        // Save to file - define path
-        const downloadPath = 'C:\\Intern\\Test IGH';
-        const filePath = path.join(downloadPath, newFileName);
-        
-        // Generate PDF directly from the page
-        await page.pdf({
-            path: filePath,
-            format: 'A4',
-            printBackground: true,
-            margin: {
-                top: '20px',
-                right: '20px',
-                bottom: '20px',
-                left: '20px'
-            }
-        });
-        
-        // go back to the previous page in order to download next file
-        if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
-            try {
-                await page.goBack({ waitUntil: 'load', timeout: 5000 }).catch(() => null);
-                await page.waitForTimeout(100);
-            } catch (goBackErr) {
-                console.warn('goBack failed but continuing:', goBackErr.message);
-            }
-        } else {
-            console.warn('Cannot goBack — page is closed or unavailable');
-        }
-        
-        await frame.waitForTimeout(1000);
-        
-        res.status(200).json(successResponse('download-and-rename-pdf', { 
-            message: 'Successfully downloaded page as PDF',
-            fileName: newFileName,
-            filePath: filePath,
-            index: index,
-            invoiceNumber: invoiceNumber
-        }));
-
+      } catch (goBackErr) {
+        console.warn("goBack failed but continuing:", goBackErr.message);
+      }
+  
+      res.status(200).json({ success: true, fileName, filePath, invoiceNumber });
     } catch (err) {
-        console.error('PDF download error:', err);
-        res.status(200).json(errorResponse('download-and-rename-pdf', err));
+      console.error("PDF generation failed:", err);
+      res.status(500).json({ success: false, message: err.message });
     }
-});
+  });
 
 // route to clear all files from local folder
 router.delete('/delete-files', async (req, res) => {
     try {
-      const downloadPath = 'C:\\Users\\benny\\Desktop\\n8n-invoice-daily';
+      const downloadPath = (process.env.DAILY_INVOICES_PATH);
       const files = fs.readdirSync(downloadPath);
   
       for (const file of files) {
@@ -430,11 +504,11 @@ router.delete('/delete-files', async (req, res) => {
         }
       }
   
-      res.status(200).json({ message: 'All files deleted successfully.' });
+      res.status(200).json(successResponse('delete-files', { message: 'All files deleted successfully.' }));
     } catch (error) {
       console.error('Error deleting files:', error);
-      res.status(500).json({ error: 'Failed to delete files.' });
+      res.status(200).json(errorResponse('delete-files', error));
     }
-  });
+});
 
 module.exports = router;

@@ -206,8 +206,201 @@ router.post("/click-enquire-invoice", async (req, res) => {
 });
 
 // route to select IGH from the dropdown; fill date to 1 week ago - for LD only
+//  DO NOT DELETE
+// router.post("/fill-job-payment-tableLD", async (req, res) => {
+//   try {
+//     const page = getPage();
+
+//     const frameElement = await page.waitForSelector('iframe.frame__webview', {
+//       state: 'attached',
+//       timeout: 10000
+//     });
+
+//     const frame = await frameElement.contentFrame();
+
+//     if (!frame) {
+//       throw new Error('Could not access iframe content');
+//     }
+
+//     await frame.waitForSelector('select[name="invoiceType"]', {
+//       state: 'visible',
+//       timeout: 10000
+//     });
+
+//     await frame.waitForTimeout(500);
+
+//     await frame.selectOption('select[name="invoiceType"]', 'LD');
+//     await frame.waitForTimeout(500);
+
+//     // Date logic: one week ago
+//     const today = new Date();
+//     const oneWeekAgo = new Date(today);
+//     oneWeekAgo.setDate(today.getDate() - 7);
+
+//     const day = String(oneWeekAgo.getDate()).padStart(2, '0');
+//     const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
+//     const year = String(oneWeekAgo.getFullYear());
+
+//     await frame.fill('input[name="fDD"]', day);
+//     await frame.waitForTimeout(200);
+//     await frame.fill('input[name="fMM"]', month);
+//     await frame.waitForTimeout(200);
+//     await frame.fill('input[name="fYYYY"]', year);
+
+//     await frame.waitForTimeout(500);
+
+//     // submit
+//     await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
+
+//     // Wait up to timeout for either details links OR the "No record found" error text.
+//     const timeout = 10000;
+//     const pollInterval = 500;
+//     const start = Date.now();
+
+//     let detailsCount = 0;
+//     let noRecordDetected = false;
+
+//     while (Date.now() - start < timeout) {
+//       detailsCount = await frame.locator('a:has-text("Detail Information")').count();
+//       const noRecordCount = await frame.locator('text=No record found').count();
+
+//       if (detailsCount > 0) {
+//         break;
+//       }
+
+//       if (noRecordCount > 0) {
+//         noRecordDetected = true;
+//         break;
+//       }
+
+//       await frame.waitForTimeout(pollInterval);
+//     }
+
+//     if (detailsCount > 0) {
+//       console.log(`Found ${detailsCount} job items with Details links`);
+//       return res.status(200).json(successResponse('fill-job-payment-tableLD', {
+//         message: 'Search completed',
+//         itemCount: detailsCount,
+//         fromDate: `${day}/${month}/${year}`
+//       }));
+//     }
+
+//     if (noRecordDetected) {
+//       console.log('No job items found (page shows "No record found").');
+//       return res.status(200).json(successResponse('fill-job-payment-tableLD', {
+//         message: 'No job items found',
+//         itemCount: 0,
+//         fromDate: `${day}/${month}/${year}`
+//       }));
+//     }
+
+//     console.warn('Timeout waiting for search results or no-record message.');
+//     throw new Error('Timeout waiting for search results');
+//   } catch (err) {
+//     console.error(err);
+//     res.status(200).json(errorResponse('fill-job-payment-tableLD', err));
+//   }
+// });
+
+// route to select IGH from the dropdown; fill date to 1 week ago - for NSIR only
+// DO NOT DELETE
+// router.post("/fill-job-payment-tableNISR", async (req, res) => {
+//   try {
+//     const page = getPage();
+
+//     const frameElement = await page.waitForSelector('iframe.frame__webview', {
+//       state: 'attached',
+//       timeout: 10000
+//     });
+
+//     const frame = await frameElement.contentFrame();
+
+//     if (!frame) {
+//       throw new Error('Could not access iframe content');
+//     }
+
+//     await frame.waitForSelector('select[name="invoiceType"]', {
+//       state: 'visible',
+//       timeout: 10000
+//     });
+
+//     await frame.waitForTimeout(500);
+
+//     await frame.selectOption('select[name="invoiceType"]', 'NISR');
+//     await frame.waitForTimeout(500);
+
+//     // Date logic: one week ago
+//     const today = new Date();
+//     const oneWeekAgo = new Date(today);
+//     oneWeekAgo.setDate(today.getDate() - 7);
+
+//     const day = String(oneWeekAgo.getDate()).padStart(2, '0');
+//     const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
+//     const year = String(oneWeekAgo.getFullYear());
+
+//     await frame.fill('input[name="fDD"]', day);
+//     await frame.waitForTimeout(200);
+//     await frame.fill('input[name="fMM"]', month);
+//     await frame.waitForTimeout(200);
+//     await frame.fill('input[name="fYYYY"]', year);
+
+//     await frame.waitForTimeout(500);
+
+//     // submit
+//     await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
+
+//     const timeout = 10000;
+//     const pollInterval = 500;
+//     const start = Date.now();
+
+//     let detailsCount = 0;
+//     let noRecordDetected = false;
+
+//     while (Date.now() - start < timeout) {
+//       detailsCount = await frame.locator('a:has-text("Detail Information")').count();
+//       const noRecordCount = await frame.locator('text=No record found').count();
+
+//       if (detailsCount > 0) {
+//         break;
+//       }
+
+//       if (noRecordCount > 0) {
+//         noRecordDetected = true;
+//         break;
+//       }
+
+//       await frame.waitForTimeout(pollInterval);
+//     }
+
+//     if (detailsCount > 0) {
+//       console.log(`Found ${detailsCount} job items with Details links`);
+//       return res.status(200).json(successResponse('fill-job-payment-tableNISR', {
+//         message: 'Search completed',
+//         itemCount: detailsCount,
+//         fromDate: `${day}/${month}/${year}`
+//       }));
+//     }
+
+//     if (noRecordDetected) {
+//       console.log('No job items found (page shows "No record found").');
+//       return res.status(200).json(successResponse('fill-job-payment-tableNISR', {
+//         message: 'No job items found',
+//         itemCount: 0,
+//         fromDate: `${day}/${month}/${year}`
+//       }));
+//     }
+
+//     console.warn('Timeout waiting for search results or no-record message.');
+//     throw new Error('Timeout waiting for search results');
+//   } catch (err) {
+//     console.error(err);
+//     res.status(200).json(errorResponse('fill-job-payment-tableNISR', err));
+//   }
+// });
+
 router.post("/fill-job-payment-tableLD", async (req, res) => {
   try {
+    const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
     const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
@@ -216,29 +409,38 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
     });
 
     const frame = await frameElement.contentFrame();
-
-    if (!frame) {
-      throw new Error('Could not access iframe content');
-    }
+    if (!frame) throw new Error('Could not access iframe content');
 
     await frame.waitForSelector('select[name="invoiceType"]', {
       state: 'visible',
       timeout: 10000
     });
-
     await frame.waitForTimeout(500);
-
     await frame.selectOption('select[name="invoiceType"]', 'LD');
     await frame.waitForTimeout(500);
 
-    // Date logic: one week ago
-    const today = new Date();
-    const oneWeekAgo = new Date(today);
-    oneWeekAgo.setDate(today.getDate() - 7);
+    // ===== DATE LOGIC =====
+    let baseDate;
+    let toBaseDate;
+    if (currentDate && currentDate !== 'NO') {
+      const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+      baseDate = new Date(yyyy, mm - 1, dd);
+      toBaseDate = new Date(yyyy, mm - 1, dd);
+    } else {
+      baseDate = new Date();
+    }
 
-    const day = String(oneWeekAgo.getDate()).padStart(2, '0');
-    const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
-    const year = String(oneWeekAgo.getFullYear());
+    // Subtract 7 days
+    baseDate.setDate(baseDate.getDate() - 7);
+    toBaseDate.setDate(toBaseDate.getDate() - 0);
+
+    const day = String(baseDate.getDate()).padStart(2, '0');
+    const month = String(baseDate.getMonth() + 1).padStart(2, '0');
+    const year = String(baseDate.getFullYear());
+
+    const new2day = String(toBaseDate.getDate()).padStart(2, '0');
+    const new2month = String(toBaseDate.getMonth() + 1).padStart(2, '0');
+    const new2year = String(toBaseDate.getFullYear());
 
     await frame.fill('input[name="fDD"]', day);
     await frame.waitForTimeout(200);
@@ -246,8 +448,13 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
     await frame.waitForTimeout(200);
     await frame.fill('input[name="fYYYY"]', year);
 
-    await frame.waitForTimeout(500);
+    await frame.fill('input[name="tDD"]', new2day);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="tMM"]', new2month);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="tYYYY"]', new2year);
 
+    await frame.waitForTimeout(500);
     // submit
     await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
 
@@ -263,15 +470,11 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
       detailsCount = await frame.locator('a:has-text("Detail Information")').count();
       const noRecordCount = await frame.locator('text=No record found').count();
 
-      if (detailsCount > 0) {
-        break;
-      }
-
+      if (detailsCount > 0) break;
       if (noRecordCount > 0) {
         noRecordDetected = true;
         break;
       }
-
       await frame.waitForTimeout(pollInterval);
     }
 
@@ -302,8 +505,10 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
 });
 
 // route to select IGH from the dropdown; fill date to 1 week ago - for NSIR only
+// do not delete
 router.post("/fill-job-payment-tableNISR", async (req, res) => {
   try {
+    const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
     const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
@@ -312,37 +517,51 @@ router.post("/fill-job-payment-tableNISR", async (req, res) => {
     });
 
     const frame = await frameElement.contentFrame();
-
-    if (!frame) {
-      throw new Error('Could not access iframe content');
-    }
+    if (!frame) throw new Error('Could not access iframe content');
 
     await frame.waitForSelector('select[name="invoiceType"]', {
       state: 'visible',
       timeout: 10000
     });
-
     await frame.waitForTimeout(500);
-
     await frame.selectOption('select[name="invoiceType"]', 'NISR');
     await frame.waitForTimeout(500);
 
-    // Date logic: one week ago
-    const today = new Date();
-    const oneWeekAgo = new Date(today);
-    oneWeekAgo.setDate(today.getDate() - 7);
+    // ===== DATE LOGIC =====
+    let baseDate;
+    let toBaseDate;
+    if (currentDate && currentDate !== 'NO') {
+      const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+      baseDate = new Date(yyyy, mm - 1, dd);
+      toBaseDate = new Date(yyyy, mm - 1, dd);
+    } else {
+      baseDate = new Date();
+    }
 
-    const day = String(oneWeekAgo.getDate()).padStart(2, '0');
-    const month = String(oneWeekAgo.getMonth() + 1).padStart(2, '0');
-    const year = String(oneWeekAgo.getFullYear());
+    // Subtract 7 days
+    baseDate.setDate(baseDate.getDate() - 7);
+    toBaseDate.setDate(baseDate.getDate() - 0);
+
+    const day = String(baseDate.getDate()).padStart(2, '0');
+    const month = String(baseDate.getMonth() + 1).padStart(2, '0');
+    const year = String(baseDate.getFullYear());
+
+    const new2day = String(toBaseDate.getDate()).padStart(2, '0');
+    const new2month = String(toBaseDate.getMonth() + 1).padStart(2, '0');
+    const new2year = String(toBaseDate.getFullYear());
 
     await frame.fill('input[name="fDD"]', day);
     await frame.waitForTimeout(200);
     await frame.fill('input[name="fMM"]', month);
     await frame.waitForTimeout(200);
     await frame.fill('input[name="fYYYY"]', year);
-
     await frame.waitForTimeout(500);
+
+    await frame.fill('input[name="tDD"]', new2day);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="tMM"]', new2month);
+    await frame.waitForTimeout(200);
+    await frame.fill('input[name="tYYYY"]', new2year);
 
     // submit
     await frame.locator('body > form > table > tbody > tr:nth-child(7) > td > input[type=submit]:nth-child(1)').click();
@@ -358,15 +577,11 @@ router.post("/fill-job-payment-tableNISR", async (req, res) => {
       detailsCount = await frame.locator('a:has-text("Detail Information")').count();
       const noRecordCount = await frame.locator('text=No record found').count();
 
-      if (detailsCount > 0) {
-        break;
-      }
-
+      if (detailsCount > 0) break;
       if (noRecordCount > 0) {
         noRecordDetected = true;
         break;
       }
-
       await frame.waitForTimeout(pollInterval);
     }
 
@@ -395,6 +610,7 @@ router.post("/fill-job-payment-tableNISR", async (req, res) => {
     res.status(200).json(errorResponse('fill-job-payment-tableNISR', err));
   }
 });
+
 
 // Click a specific "Details" link by index
 router.post("/click-job-item", async (req, res) => {
@@ -441,92 +657,97 @@ router.post("/click-job-item", async (req, res) => {
 
 // route to download and rename pdf files
 router.post("/download-and-rename-pdf", async (req, res) => {
-    try {
-        const { index } = req.body;
-        
-        const page = getPage();
-        
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
-        });
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
-        }
-        
-        await frame.waitForTimeout(500);
-        
-        let invoiceNumber = 'unknown';
-        try {
-            const invoiceText = await frame.textContent('body');
-            const invoiceMatch = invoiceText.match(/Invoice No\s*:(\w+)/);
-            
-            if (invoiceMatch) {
-                invoiceNumber = invoiceMatch[1].trim();
-                console.log(`Found invoice number: ${invoiceNumber}`);
-            } else {
-                console.warn('Invoice number not found, using index-based name');
-                invoiceNumber = `invoice_${index + 1}`;
-            }
-        } catch (extractErr) {
-            console.error('Error extracting invoice number:', extractErr);
-            invoiceNumber = `invoice_${index + 1}`;
-        }
-        
-        const newFileName = `${invoiceNumber}.pdf`;
-        
-        console.log(`Downloading page as PDF and saving as: ${newFileName}`);
-        
-        // Save to file - define path
-        const downloadPath = 'C:\\Intern\\Test IGH';
-        const filePath = path.join(downloadPath, newFileName);
-        
-        await page.pdf({
-            path: filePath,
-            format: 'A4',
-            printBackground: true,
-            margin: {
-                top: '20px',
-                right: '20px',
-                bottom: '20px',
-                left: '20px'
-            }
-        });
-        
-        if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
-            try {
-                await page.goBack({ waitUntil: 'load', timeout: 5000 }).catch(() => null);
-                await page.waitForTimeout(100);
-            } catch (goBackErr) {
-                console.warn('goBack failed but continuing:', goBackErr.message);
-            }
-        } else {
-            console.warn('Cannot goBack — page is closed or unavailable');
-        }
-        
-        await frame.waitForTimeout(1000);
-        
-        res.status(200).json(successResponse('download-and-rename-pdf', { 
-            message: 'Successfully downloaded page as PDF',
-            fileName: newFileName,
-            filePath: filePath,
-            index: index,
-            invoiceNumber: invoiceNumber
-        }));
+  try {
+    const { index } = req.body;
+    const page = getPage();
 
-    } catch (err) {
-        console.error('PDF download error:', err);
-        res.status(200).json(errorResponse('download-and-rename-pdf', err));
+    // Wait for iframe
+    const frameElement = await page.waitForSelector("iframe.frame__webview", { state: "attached", timeout: 15000 });
+    const frame = await frameElement.contentFrame();
+    if (!frame) throw new Error("Unable to access iframe");
+
+    await frame.waitForLoadState("networkidle");
+
+    // Extract invoice number
+    let invoiceNumber = `invoice_${index + 1}`;
+    try {
+      const text = await frame.textContent("body");
+      const match = text?.match(/Invoice No\s*:?([A-Z0-9]+)/i);
+      if (match) invoiceNumber = match[1].trim();
+    } catch (_) {}
+
+    const fileName = `${invoiceNumber}.pdf`;
+    const filePath = path.join(process.env.LD_NISR_PATH, fileName);
+    console.log(`Saving invoice as ${fileName}`);
+
+    // Hide header/footer and fullscreen iframe
+    await page.addStyleTag({
+      content: `
+        app-header, app-footer { display: none !important; }
+        .app__main-wrapper { display: block !important; }
+        app-frame, iframe.frame__webview {
+          position: fixed !important;
+          inset: 0 !important;
+          width: 100vw !important;
+          height: 100vh !important;
+          border: none !important;
+        }
+        body { margin: 0 !important; overflow: hidden !important; }
+      `
+    });
+
+    // Generate PDF
+    await page.emulateMedia({ media: "print" });
+    await page.pdf({
+      path: filePath,
+      format: "A4",
+      landscape: true,
+      printBackground: true,
+      scale: 0.95
+    });
+
+    // Go back for next invoice
+    try {
+      if (page && typeof page.isClosed === "function" && !page.isClosed()) {
+        await page.goBack({ waitUntil: "load", timeout: 5000 }).catch(() => null);
+        await page.waitForTimeout(100);
+      }
+    } catch (goBackErr) {
+      console.warn("goBack failed but continuing:", goBackErr.message);
     }
+
+    res.status(200).json({ success: true, fileName, filePath, invoiceNumber });
+  } catch (err) {
+    console.error("PDF generation failed:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // route to delete all files in the local folder
 router.delete('/delete-files', async (req, res) => {
   try {
-    const downloadPath = 'C:\\Intern\\Test IGH';
+    const downloadPath = (process.env.LD_NISR_PATH);
+    const files = fs.readdirSync(downloadPath);
+
+    for (const file of files) {
+      const filePath = path.join(downloadPath, file);
+      if (fs.lstatSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(200).json(successResponse('delete-files', { message: 'All files deleted successfully.' }));
+  } catch (error) {
+    console.error('Error deleting files:', error);
+    res.status(200).json(errorResponse('delete-files', error));
+  }
+});
+
+
+// route to delete all files in the local folder
+router.delete('/delete-files', async (req, res) => {
+  try {
+    const downloadPath = (process.env.LD_NISR_PATH);
     const files = fs.readdirSync(downloadPath);
 
     for (const file of files) {
