@@ -333,10 +333,21 @@ router.post("/fill-job-payment-table", async (req, res) => {
         // Date logic
         let today;
         
-        if (currentDate) {
-            // Parse the custom date in DD/MM/YYYY format
+        if (currentDate && currentDate.trim() !== '') {
+            // Validate DD/MM/YYYY format
+            const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+            
+            if (!datePattern.test(currentDate)) {
+                throw new Error('Invalid date format. Expected DD/MM/YYYY');
+            }
+            
             const [day, month, year] = currentDate.split('/');
-            today = new Date(year, month - 1, day); // month - 1 because Date months are 0-indexed
+            today = new Date(year, month - 1, day);
+            
+            // Check if the date is valid
+            if (isNaN(today.getTime())) {
+                throw new Error('Invalid date provided');
+            }
         } else {
             // Use actual current date
             today = new Date();

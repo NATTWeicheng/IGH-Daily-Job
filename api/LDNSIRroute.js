@@ -403,7 +403,7 @@ router.post("/click-enquire-invoice", async (req, res) => {
 // do not delete
 router.post("/fill-job-payment-tableLD", async (req, res) => {
   try {
-    const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
+    const { currentDate } = req.body; // Pass DD/MM/YYYY or omit
     const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
@@ -422,18 +422,33 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
     await frame.selectOption('select[name="invoiceType"]', 'LD');
     await frame.waitForTimeout(500);
 
-    // ===== DATE LOGIC =====
+    // ===== DATE LOGIC WITH VALIDATION =====
     let baseDate;
     let toBaseDate;
-    if (currentDate && currentDate !== 'NO') {
-      const [dd, mm, yyyy] = currentDate.split('/').map(Number);
-      baseDate = new Date(yyyy, mm - 1, dd);
-      toBaseDate = new Date(yyyy, mm - 1, dd);
-    } else {
+    
+    if (currentDate && currentDate.trim() !== '') {
+      // Validate DD/MM/YYYY format
+      const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+      
+      if (datePattern.test(currentDate)) {
+        const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+        const parsedDate = new Date(yyyy, mm - 1, dd);
+        
+        // Check if the date is valid
+        if (!isNaN(parsedDate.getTime())) {
+          baseDate = new Date(yyyy, mm - 1, dd);
+          toBaseDate = new Date(yyyy, mm - 1, dd);
+        }
+      }
+    }
+    
+    // If baseDate wasn't set, use current date
+    if (!baseDate) {
       baseDate = new Date();
+      toBaseDate = new Date();
     }
 
-    // Subtract 7 days
+    // Subtract 7 days for from date, 0 days for to date
     baseDate.setDate(baseDate.getDate() - 7);
     toBaseDate.setDate(toBaseDate.getDate() - 0);
 
@@ -511,7 +526,7 @@ router.post("/fill-job-payment-tableLD", async (req, res) => {
 // do not delete
 router.post("/fill-job-payment-tableNISR", async (req, res) => {
   try {
-    const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
+    const { currentDate } = req.body; // Pass DD/MM/YYYY or omit
     const page = getPage();
 
     const frameElement = await page.waitForSelector('iframe.frame__webview', {
@@ -530,21 +545,35 @@ router.post("/fill-job-payment-tableNISR", async (req, res) => {
     await frame.selectOption('select[name="invoiceType"]', 'NISR');
     await frame.waitForTimeout(500);
 
-    // ===== DATE LOGIC =====
+    // ===== DATE LOGIC WITH VALIDATION =====
     let baseDate;
     let toBaseDate;
-    toBaseDate.setDate(batoBaseDateeDate.getDate() - 0);
-    if (currentDate && currentDate !== 'NO') {
-      const [dd, mm, yyyy] = currentDate.split('/').map(Number);
-      baseDate = new Date(yyyy, mm - 1, dd);
-      toBaseDate = new Date(yyyy, mm - 1, dd);
-    } else {
+    
+    if (currentDate && currentDate.trim() !== '') {
+      // Validate DD/MM/YYYY format
+      const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+      
+      if (datePattern.test(currentDate)) {
+        const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+        const parsedDate = new Date(yyyy, mm - 1, dd);
+        
+        // Check if the date is valid
+        if (!isNaN(parsedDate.getTime())) {
+          baseDate = new Date(yyyy, mm - 1, dd);
+          toBaseDate = new Date(yyyy, mm - 1, dd);
+        }
+      }
+    }
+    
+    // If baseDate wasn't set, use current date
+    if (!baseDate) {
       baseDate = new Date();
+      toBaseDate = new Date();
     }
 
-    // Subtract 7 days
+    // Subtract 7 days for from date, 0 days for to date
     baseDate.setDate(baseDate.getDate() - 7);
-    toBaseDate.setDate(baseDate.getDate() - 0);
+    toBaseDate.setDate(toBaseDate.getDate() - 0);
 
     const day = String(baseDate.getDate()).padStart(2, '0');
     const month = String(baseDate.getMonth() + 1).padStart(2, '0');

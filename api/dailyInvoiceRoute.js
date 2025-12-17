@@ -285,7 +285,7 @@ router.post("/click-enquire-invoice", async (req, res) => {
 
 router.post("/fill-job-payment-table", async (req, res) => {
     try {
-        const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
+        const { currentDate } = req.body; // Pass DD/MM/YYYY or omit
 
         const page = getPage();
         
@@ -315,12 +315,26 @@ router.post("/fill-job-payment-table", async (req, res) => {
         await frame.click('input[name="accepted"][value="Y"]');
         await frame.waitForTimeout(500);
 
-        // ===== DATE LOGIC =====
+        // ===== DATE LOGIC WITH VALIDATION =====
         let baseDate;
-        if (currentDate && currentDate !== 'NO') {
-            const [dd, mm, yyyy] = currentDate.split('/').map(Number);
-            baseDate = new Date(yyyy, mm - 1, dd);
-        } else {
+        
+        if (currentDate && currentDate.trim() !== '') {
+            // Validate DD/MM/YYYY format
+            const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+            
+            if (datePattern.test(currentDate)) {
+                const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+                const parsedDate = new Date(yyyy, mm - 1, dd);
+                
+                // Check if the date is valid
+                if (!isNaN(parsedDate.getTime())) {
+                    baseDate = parsedDate;
+                }
+            }
+        }
+        
+        // If baseDate wasn't set (no date, invalid format, or invalid date), use current date
+        if (!baseDate) {
             baseDate = new Date();
         }
 
@@ -372,7 +386,6 @@ router.post("/fill-job-payment-table", async (req, res) => {
         res.status(200).json(errorResponse('fill-job-payment-table', err));
     }
 });
-
 // Click a specific "Details" link by index
 router.post("/click-job-item", async (req, res) => {
     try {
