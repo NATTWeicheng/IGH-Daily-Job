@@ -328,93 +328,70 @@ router.post("/click-job-item", async (req, res) => {
 
 // route to download and rename pdf files
 router.post("/download-and-rename-pdf", async (req, res) => {
-    try {
-        const { index } = req.body; // Get index from request (0, 1, 2)
-        
-        
-        const page = getPage();
-        
-        // Iframe
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
-        });
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
-        }
-        
-        await frame.waitForTimeout(500);
-        
-        // Extract invoice number from the page
-        let invoiceNumber = 'unknown';
-        try {
-            // Try to find the invoice number in the iframe
-            const invoiceText = await frame.textContent('body');
-            const invoiceMatch = invoiceText.match(/Invoice No\s*:(\w+)/);
-            
-            if (invoiceMatch) {
-                invoiceNumber = invoiceMatch[1].trim();
-                console.log(`Found invoice number: ${invoiceNumber}`);
-            } else {
-                console.warn('Invoice number not found, using index-based name');
-                invoiceNumber = `invoice_${index + 1}`;
-            }
-        } catch (extractErr) {
-            console.error('Error extracting invoice number:', extractErr);
-            invoiceNumber = `invoice_${index + 1}`;
-        }
-        
-        // Use invoice number as filename
-        const newFileName = `${invoiceNumber}.pdf`;
-        
-        console.log(`Downloading page as PDF and saving as: ${newFileName}`);
-        
-        // Save to file - define path
-        const downloadPath = (process.env.LOCALFILE_PATH);
-        const filePath = path.join(downloadPath, newFileName);
-        
-        // Generate PDF directly from the page
-        await page.pdf({
-            path: filePath,
-            format: 'A4',
-            printBackground: true,
-            margin: {
-                top: '20px',
-                right: '20px',
-                bottom: '20px',
-                left: '20px'
-            }
-        });
-        
-        // go back to the previous page in order to download next file
-        if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
-            try {
-                await page.goBack({ waitUntil: 'load', timeout: 5000 }).catch(() => null);
-                await page.waitForTimeout(100);
-            } catch (goBackErr) {
-                console.warn('goBack failed but continuing:', goBackErr.message);
-            }
-        } else {
-            console.warn('Cannot goBack — page is closed or unavailable');
-        }
-        
-        await frame.waitForTimeout(1000);
-        
-        res.status(200).json(successResponse('download-and-rename-pdf', { 
-            message: 'Successfully downloaded page as PDF',
-            fileName: newFileName,
-            filePath: filePath,
-            index: index,
-            invoiceNumber: invoiceNumber
-        }));
+  try {
+    const { index } = req.body;
+    const page = getPage();
 
-    } catch (err) {
-        console.error('PDF download error:', err);
-        res.status(200).json(errorResponse('download-and-rename-pdf', err));
+    // Wait for iframe
+    const frameElement = await page.waitForSelector("iframe.frame__webview", { state: "attached", timeout: 15000 });
+    const frame = await frameElement.contentFrame();
+    if (!frame) throw new Error("Unable to access iframe");
+
+    await frame.waitForLoadState("networkidle");
+
+    // Extract invoice number
+    let invoiceNumber = `invoice_${index + 1}`;
+    try {
+      const text = await frame.textContent("body");
+      const match = text?.match(/Invoice No\s*:?([A-Z0-9]+)/i);
+      if (match) invoiceNumber = match[1].trim();
+    } catch (_) {}
+
+    const fileName = `${invoiceNumber}.pdf`;
+    const filePath = path.join(process.env.LOCALFILE_PATH, fileName);
+    console.log(`Saving invoice as ${fileName}`);
+
+    // Hide header/footer and fullscreen iframe
+    await page.addStyleTag({
+      content: `
+        app-header, app-footer { display: none !important; }
+        .app__main-wrapper { display: block !important; }
+        app-frame, iframe.frame__webview {
+          position: fixed !important;
+          inset: 0 !important;
+          width: 100vw !important;
+          height: 100vh !important;
+          border: none !important;
+        }
+        body { margin: 0 !important; overflow: hidden !important; }
+      `
+    });
+
+    // Generate PDF
+    await page.emulateMedia({ media: "print" });
+    await page.pdf({
+      path: filePath,
+      format: "A4",
+      landscape: true,
+      printBackground: true,
+      scale: 0.95
+    });
+
+    // Go back for next invoice
+    try {
+      if (page && typeof page.isClosed === "function" && !page.isClosed()) {
+        await page.goBack({ waitUntil: "load", timeout: 5000 }).catch(() => null);
+        await page.waitForTimeout(100);
+      }
+    } catch (goBackErr) {
+      console.warn("goBack failed but continuing:", goBackErr.message);
     }
+
+    res.status(200).json({ success: true, fileName, filePath, invoiceNumber });
+  } catch (err) {
+    console.error("PDF generation failed:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 module.exports = router;
