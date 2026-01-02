@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser } = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser, retryOnTimeout } = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -25,112 +25,122 @@ router.post('/stop-chromium', async (req, res) => {
 // go to page
 router.post("/fill-login-details", async (req, res) => {
     try {
-        const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
-        
+        await launchAndGoto(process.env.PORTNET_WEBSITE);
         const page = getPage();
-        
-        // Check timing BEFORE starting login
-        let authResult = getGoogleAuthCode();
-        console.log(`Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
-        
-        // If less than 15 seconds, wait for fresh code
+
+        // ===== PRE-LOGIN OTP CHECK =====
+        let authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE);
+        console.log(
+            `Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`
+        );
+
+        // If OTP is about to expire, wait for a fresh window
         if (authResult.secondsRemaining < 15) {
             const waitTime = (authResult.secondsRemaining + 2) * 1000;
             await page.waitForTimeout(waitTime);
-            authResult = getGoogleAuthCode();
+            authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE2);
         }
-        
-        // Fill username
+
+        // fill login details
         await page.waitForSelector('#mat-input-0', { state: 'visible', timeout: 10000 });
         await page.locator('#mat-input-0').fill(process.env.PORTNET_USER);
-        
-        // Fill password
+
         await page.waitForSelector('#mat-input-1', { state: 'visible', timeout: 10000 });
         await page.locator('#mat-input-1').fill(process.env.PORTNET_PASSWORD);
 
-        // Click login
-        await page.locator('body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button').click();
-        
-        // Wait for 2FA page
+        await page.locator(
+            'body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button'
+        ).click();
+
+        // wait for 2fa 
         await page.waitForSelector('#PASSWORD', { state: 'visible', timeout: 10000 });
         console.log('2FA page loaded');
-        
-        // Get current code (should still have plenty of time)
-        authResult = getGoogleAuthCode();
-        console.log(`At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
-        
-        // Clear field first
-        await page.locator('#PASSWORD').clear();
+
+        // Generate OTP close to submission
+        authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE);
+        console.log(
+            `At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`
+        );
+
+        // ===== ENTER OTP =====
+        const otpInput = page.locator('#PASSWORD');
+
+        await otpInput.clear();
         await page.waitForTimeout(300);
-        
-        // Click to focus
-        await page.locator('#PASSWORD').click();
+        await otpInput.click();
         await page.waitForTimeout(200);
-        
-        // Fill the code
-        await page.locator('#PASSWORD').fill(authResult.code);
-        
-        // Verify it was actually filled
-        const filledValue = await page.locator('#PASSWORD').inputValue();
+        await otpInput.fill(authResult.code);
+
+        // Verify input
+        let filledValue = await otpInput.inputValue();
         console.log(`Verification - Expected: "${authResult.code}", Actual: "${filledValue}"`);
-        
+
+        // Retry once if fill failed
         if (filledValue !== authResult.code) {
-            console.warn('Fill failed, retrying...');
-            
-            // Retry once
-            await page.locator('#PASSWORD').clear();
+            console.warn('OTP fill failed, retrying...');
+            await otpInput.clear();
             await page.waitForTimeout(300);
-            await page.locator('#PASSWORD').click();
-            await page.waitForTimeout(200);
-            
-            // Type password
-            await page.locator('#PASSWORD').type(authResult.code, { delay: 50 });
-            
-            const retryValue = await page.locator('#PASSWORD').inputValue();
-            console.log(`Retry verification: "${retryValue}"`);
-            
-            if (retryValue !== authResult.code) {
-                throw new Error(`Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${retryValue}`);
+            await otpInput.type(authResult.code, { delay: 50 });
+
+            filledValue = await otpInput.inputValue();
+            console.log(`Retry verification: "${filledValue}"`);
+
+            if (filledValue !== authResult.code) {
+                throw new Error(
+                    `Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${filledValue}`
+                );
             }
         }
-        
-        // Click continue
+
+        // Submit 2FA
         await page.locator('#Continue').click();
-        
-        // Wait a bit for processing
         await page.waitForTimeout(3000);
-        
-        // Check current state
+
+        // ===== POST-LOGIN CHECK =====
         const currentUrl = page.url();
         console.log('Current URL:', currentUrl);
-        
-        // Check for error messages first
-        const errorCount = await page.locator('text=/invalid|incorrect|wrong|error/i').count();
+
+        const errorCount = await page
+            .locator('text=/invalid|incorrect|wrong|error/i')
+            .count();
+
         if (errorCount > 0) {
-            const errorText = await page.locator('text=/invalid|incorrect|wrong|error/i').first().textContent();
+            const errorText = await page
+                .locator('text=/invalid|incorrect|wrong|error/i')
+                .first()
+                .textContent();
             throw new Error(`2FA Error: ${errorText}`);
         }
 
-        return res.status(200).json(successResponse('fill-login-details', {
-            message: 'Login and 2FA completed successfully'
-        }));
+        return res.status(200).json(
+            successResponse('fill-login-details', {
+                message: 'Login and 2FA completed successfully'
+            })
+        );
 
     } catch (err) {
         console.error('Login error:', err);
-        return res.status(200).json(errorResponse('fill-login-details', err));
+        return res.status(200).json(
+            errorResponse('fill-login-details', err)
+        );
     }
 });
 
 // route to click on others
 router.post("/click-others", async (req, res) => {
     try {
-        const page = getPage();
-        let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
-        await page.locator(otherSelector).click()
-        
-        // Verify: Wait for panel to be visible
-        await page.waitForSelector('.lv2-panel', { state: 'visible', timeout: 5000 });
-        
+        const result = await retryOnTimeout(async (page) => {
+            let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
+            await page.locator(otherSelector).click()
+
+            // Verify: Wait for panel to be visible
+            await page.waitForSelector('.lv2-panel', { state: 'visible', timeout: 5000 });
+        });
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-others', result.error));
+        }
+
         res.status(200).json(successResponse('click-others', { message: 'Clicked Others successfully' }));
 
     } catch (err) {
@@ -142,16 +152,21 @@ router.post("/click-others", async (req, res) => {
 // route to click on supplier management
 router.post("/click-supplier-management", async (req, res) => {
     try {
-        const page = getPage();
-        let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
-        await page.locator(supplierManagamentSelector).click()
-        
-        // Verify: Wait for iframe to appear
-        await page.waitForSelector('iframe.frame__webview', { 
-            state: 'visible', 
-            timeout: 10000 
+        const result = await retryOnTimeout(async (page) => {
+            let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
+            await page.locator(supplierManagamentSelector).click()
+
+            // Verify: Wait for iframe to appear
+            await page.waitForSelector('iframe.frame__webview', {
+                state: 'visible',
+                timeout: 10000
+            });
         });
-        
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-supplier-management', result.error));
+        }
+
         res.status(200).json(successResponse('click-supplier-management', { message: 'Clicked Supplier Management successfully' }));
 
     } catch (err) {
@@ -160,168 +175,33 @@ router.post("/click-supplier-management", async (req, res) => {
     }
 });
 
-// route to click on enquire job payment under payment advice
-router.post("/click-job-payment", async (req, res) => {
-    try {
-        const page = getPage();
-        
-        // Get the iframe
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 15000
-        });
-        
-        await page.waitForTimeout(1000);
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
-        }
-        
-        // Wait for iframe content to load
-        await frame.waitForLoadState('domcontentloaded', { timeout: 10000 });
-        
-        // Wait for "PAYMENT MODULES" to appear in the iframe
-        await frame.waitForSelector('text=PAYMENT MODULES', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
-        // Click the link inside the iframe
-        await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initJobPaymentEnquiryID"]').click();
-        
-        // Verify: Wait for the form to load
-        await frame.waitForSelector('select[name="jobTy"]', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
-        res.status(200).json(successResponse('click-job-payment', { message: 'Clicked Enquire Job Payment and verified form loaded' }));
-
-    } catch (err) {
-        console.error(err);
-        res.status(200).json(errorResponse('click-job-payment', err));
-    }
-});
-
-// route to select IGH from the dropdown
-// DO NOT DELETE
-// router.post("/fill-job-payment-table", async (req, res) => {
-//     try {
-//         const page = getPage();
-        
-//         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-//             state: 'attached', 
-//             timeout: 10000 
-//         });
-        
-//         const frame = await frameElement.contentFrame();
-        
-//         if (!frame) {
-//             throw new Error('Could not access iframe content');
-//         }
-        
-//         // Select job type as IGH
-//         await frame.waitForSelector('select[name="jobTy"]', { 
-//             state: 'visible', 
-//             timeout: 10000 
-//         });
-        
-//         await frame.waitForTimeout(500);
-        
-//         await frame.selectOption('select[name="jobTy"]', 'IGH');
-//         await frame.waitForTimeout(500);
-        
-//         // Select accepted radio button
-//         await frame.waitForSelector('input[name="acptI"][value="Y"]', {
-//             state: 'visible',
-//             timeout: 5000
-//         });
-//         await frame.click('input[name="acptI"][value="Y"]');
-//         await frame.waitForTimeout(500);
-        
-//         // Date logic
-//         const today = new Date();
-//         const threeDaysAgo = new Date(today);
-//         threeDaysAgo.setDate(today.getDate() - 3);
-        
-//         const day = String(threeDaysAgo.getDate()).padStart(2, '0');
-//         const month = String(threeDaysAgo.getMonth() + 1).padStart(2, '0');
-//         const year = String(threeDaysAgo.getFullYear());
-        
-//         // Fill From date
-//         await frame.fill('input[name="shftDtFrDD"]', day);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="shftDtFrMM"]', month);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="shftDtFrYYYY"]', year);
-        
-//         // Fill To date
-//         await frame.fill('input[name="shftDtToDD"]', day);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="shftDtToMM"]', month);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="shftDtToYYYY"]', year);
-        
-//         await frame.waitForTimeout(500);
-        
-//         // Click submit button
-//         await frame.locator('body > form > table:nth-child(8) > tbody > tr > td > input[type=button]:nth-child(1)').click();
-        
-//         // Wait for the "Details" links to appear
-//         await frame.waitForSelector('a:has-text("Details")', { 
-//             state: 'visible', 
-//             timeout: 10000 
-//         });
-        
-//         await frame.waitForTimeout(1000);
-        
-//         // Get ONLY the rows with "Details" links
-//         const detailsLinks = await frame.locator('a:has-text("Details")').all();
-        
-//         console.log(`Found ${detailsLinks.length} job items with Details links`);
-        
-//         res.status(200).json(successResponse('fill-job-payment-table', { 
-//             message: 'Search completed',
-//             itemCount: detailsLinks.length,
-//             fromDate: `${day}/${month}/${year}`
-//         }));
-
-//     } catch (err) {
-//         console.error(err);
-//         res.status(200).json(errorResponse('fill-job-payment-table', err));
-//     }
-// });
-
+// route to fill table for daily jobs
 router.post("/fill-job-payment-table", async (req, res) => {
     try {
-        const { currentDate } = req.body; // Get currentDate from request body
-        
+        const { currentDate } = req.body;
+
         const page = getPage();
-        
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
+
+        const frameElement = await page.waitForSelector('iframe.frame__webview', {
+            state: 'attached',
+            timeout: 10000
         });
-        
+
         const frame = await frameElement.contentFrame();
-        
         if (!frame) {
             throw new Error('Could not access iframe content');
         }
-        
+
         // Select job type as IGH
-        await frame.waitForSelector('select[name="jobTy"]', { 
-            state: 'visible', 
-            timeout: 10000 
+        await frame.waitForSelector('select[name="jobTy"]', {
+            state: 'visible',
+            timeout: 10000
         });
-        
+
         await frame.waitForTimeout(500);
-        
         await frame.selectOption('select[name="jobTy"]', 'IGH');
         await frame.waitForTimeout(500);
-        
+
         // Select accepted radio button
         await frame.waitForSelector('input[name="acptI"][value="Y"]', {
             state: 'visible',
@@ -329,59 +209,67 @@ router.post("/fill-job-payment-table", async (req, res) => {
         });
         await frame.click('input[name="acptI"][value="Y"]');
         await frame.waitForTimeout(500);
-        
-        // Date logic
-        let today;
-        
-        if (currentDate) {
-            // Parse the custom date in DD/MM/YYYY format
-            const [day, month, year] = currentDate.split('/');
-            today = new Date(year, month - 1, day); // month - 1 because Date months are 0-indexed
-        } else {
-            // Use actual current date
-            today = new Date();
+
+        let today = new Date(); // default fallback
+
+        if (currentDate && currentDate.trim() !== '') {
+            const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+
+            if (!datePattern.test(currentDate)) {
+                console.warn(`[DATE] Invalid format, using system date: ${currentDate}`);
+            } else {
+                const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+                const parsedDate = new Date(yyyy, mm - 1, dd);
+
+                if (isNaN(parsedDate.getTime())) {
+                    console.warn(`[DATE] Invalid date value, using system date: ${currentDate}`);
+                } else {
+                    today = parsedDate;
+                }
+            }
         }
-        
+
+        // subtract 3 days
         const threeDaysAgo = new Date(today);
         threeDaysAgo.setDate(today.getDate() - 3);
-        
+
         const day = String(threeDaysAgo.getDate()).padStart(2, '0');
         const month = String(threeDaysAgo.getMonth() + 1).padStart(2, '0');
         const year = String(threeDaysAgo.getFullYear());
-        
+
         // Fill From date
         await frame.fill('input[name="shftDtFrDD"]', day);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="shftDtFrMM"]', month);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="shftDtFrYYYY"]', year);
-        
+
         // Fill To date
         await frame.fill('input[name="shftDtToDD"]', day);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="shftDtToMM"]', month);
         await frame.waitForTimeout(200);
         await frame.fill('input[name="shftDtToYYYY"]', year);
-        
+
         await frame.waitForTimeout(500);
-        
-        // Click submit button
-        await frame.locator('body > form > table:nth-child(8) > tbody > tr > td > input[type=button]:nth-child(1)').click();
-        
-        // Wait for the "Details" links to appear
-        await frame.waitForSelector('a:has-text("Details")', { 
-            state: 'visible', 
-            timeout: 10000 
+
+        // Submit
+        await frame.locator(
+            'body > form > table:nth-child(8) > tbody > tr > td > input[type=button]:nth-child(1)'
+        ).click();
+
+        // Wait for results
+        await frame.waitForSelector('a:has-text("Details")', {
+            state: 'visible',
+            timeout: 10000
         });
-        
+
         await frame.waitForTimeout(1000);
-        
-        // Get ONLY the rows with "Details" links
+
         const detailsLinks = await frame.locator('a:has-text("Details")').all();
-        
         console.log(`Found ${detailsLinks.length} job items with Details links`);
-        
-        res.status(200).json(successResponse('fill-job-payment-table', { 
+
+        res.status(200).json(successResponse('fill-job-payment-table', {
             message: 'Search completed',
             itemCount: detailsLinks.length,
             fromDate: `${day}/${month}/${year}`
@@ -482,88 +370,117 @@ router.post("/click-summary-of-igh-moves", async (req, res) => {
 
 // route to download and rename excel files
 router.post("/download-and-rename-excel", async (req, res) => {
+    
     try {
-        const { index } = req.body;
+      const { index, currentDate } = req.body;
+      const page = getPage();
+  console.log(currentDate);
+      const frameElement = await page.waitForSelector('iframe.frame__webview', {
+        state: 'attached',
+        timeout: 10000
+      });
+      const frame = await frameElement.contentFrame();
+  
+      if (!frame) {
+        throw new Error('Could not access iframe content');
+      }
+  
+      // Wait for the "Download To Excel" button to be visible
+      await frame.waitForSelector('input[type="submit"][value="Download To Excel"]', {
+        state: 'visible',
+        timeout: 10000
+      });
+      await frame.waitForTimeout(500);
+  
+      // Try to parse and validate the provided date
+      let targetDate = null;
+      
+      if (currentDate && typeof currentDate === 'string') {
+        const parts = currentDate.trim().split('/');
         
-        const page = getPage();
-        
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
-        });
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
+        if (parts.length === 3) {
+          const day = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10);
+          const year = parseInt(parts[2], 10);
+  
+          // Check if all parts are valid numbers and in valid ranges
+          if (!isNaN(day) && !isNaN(month) && !isNaN(year) &&
+              month >= 1 && month <= 12 && 
+              day >= 1 && day <= 31 && 
+              year >= 1900 && year <= 2100) {
+            
+            // Create date object (month is 0-indexed in JS)
+            const testDate = new Date(year, month - 1, day);
+  
+            // Verify the date is valid (handles invalid dates like 31/02/2024)
+            if (testDate.getDate() === day && 
+                testDate.getMonth() === month - 1 && 
+                testDate.getFullYear() === year) {
+              targetDate = testDate;
+              console.log(`Using provided date: ${currentDate}`);
+            }
+          }
         }
-        
-        // Wait for the "Download To Excel" button to be visible
-        await frame.waitForSelector('input[type="submit"][value="Download To Excel"]', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
-        await frame.waitForTimeout(500);
-        
-        // Get current date in Singapore timezone
+      }
+  
+      // If date parsing failed, use Singapore current date
+      if (!targetDate) {
+        console.log('Invalid date provided, using Singapore current date');
         const now = new Date();
-        const singaporeNow = new Date(now.toLocaleString('en-US', { 
-            timeZone: 'Asia/Singapore'
-        }));
-        
-        // Subtract 3 days
-        singaporeNow.setDate(singaporeNow.getDate() - 3);
-        
-        // Format date (DD MMM format)
-        const day = String(singaporeNow.getDate()).padStart(2, '0');
-        const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
-                           'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-        const month = monthNames[singaporeNow.getMonth()];
-        
-        // Create filename: DD MMM #
-        const fileNumber = index + 1;
-        const newFileName = `${day} ${month} ${fileNumber}.xls`;
-        
-        console.log(`Downloading Excel file and renaming to: ${newFileName}`);
-        
-        // Save to file - define path
-        const downloadPath = (process.env.DAILY_JOB_PATH);
-        
-        // Set up download listener on the PAGE (not frame)
-        const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
-        
-        // Click the "Download To Excel" button
-        await frame.locator('input[type="submit"][value="Download To Excel"]').click();
-        
-        console.log('Waiting for download to start...');
-        
-        // Wait for download to start
-        const download = await downloadPromise;
-        
-        console.log('Download started, saving file...');
-        
-        // Save the file with the new name
-        const filePath = path.join(downloadPath, newFileName);
-        await download.saveAs(filePath);
-        
-        console.log(`File saved as: ${filePath}`);
-        
-        await frame.waitForTimeout(1000);
-        
-        res.status(200).json(successResponse('download-and-rename-excel', { 
-            message: 'Successfully downloaded and renamed Excel file',
-            fileName: newFileName,
-            filePath: filePath,
-            index: index,
-            fileNumber: fileNumber
-        }));
-
+        targetDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+      }
+  
+      // Subtract 3 days
+      targetDate.setDate(targetDate.getDate() - 3);
+  
+      // Format date (DD MMM format)
+      const day = String(targetDate.getDate()).padStart(2, '0');
+      const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const month = monthNames[targetDate.getMonth()];
+  
+      // Create filename: DD MMM #
+      const fileNumber = index + 1;
+      const newFileName = `${day} ${month} ${fileNumber}.xls`;
+  
+      console.log(`Downloading Excel file and renaming to: ${newFileName}`);
+  
+      // Save to file - define path
+      const downloadPath = (process.env.DAILY_JOB_PATH);
+  
+      // Set up download listener on the PAGE (not frame)
+      const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
+  
+      // Click the "Download To Excel" button
+      await frame.locator('input[type="submit"][value="Download To Excel"]').click();
+  
+      console.log('Waiting for download to start...');
+  
+      // Wait for download to start
+      const download = await downloadPromise;
+  
+      console.log('Download started, saving file...');
+  
+      // Save the file with the new name
+      const filePath = path.join(downloadPath, newFileName);
+      await download.saveAs(filePath);
+  
+      console.log(`File saved as: ${filePath}`);
+  
+      await frame.waitForTimeout(1000);
+  
+      res.status(200).json(successResponse('download-and-rename-excel', {
+        message: 'Successfully downloaded and renamed Excel file',
+        fileName: newFileName,
+        filePath: filePath,
+        index: index,
+        fileNumber: fileNumber
+      }));
+  
     } catch (err) {
-        console.error('Download error:', err);
-        res.status(200).json(errorResponse('download-and-rename-excel', err));
+      console.error('Download error:', err);
+      res.status(200).json(errorResponse('download-and-rename-excel', err));
     }
-});
+  });
 
 // route to click back button from the excel download page
 router.post("/click-back-button1", async (req, res) => {

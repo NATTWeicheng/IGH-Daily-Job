@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser } = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser, retryOnTimeout } = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -23,113 +23,122 @@ router.post('/stop-chromium', async (req, res) => {
 // go to page
 router.post("/fill-login-details", async (req, res) => {
     try {
-        const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
-        
+        await launchAndGoto(process.env.PORTNET_WEBSITE);
         const page = getPage();
-        
-        // Check timing BEFORE starting login
-        let authResult = getGoogleAuthCode();
-        console.log(`Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
-        
-        // If less than 15 seconds, wait for fresh code
+
+        // ===== PRE-LOGIN OTP CHECK =====
+        let authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE);
+        console.log(
+            `Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`
+        );
+
+        // If OTP is about to expire, wait for a fresh window
         if (authResult.secondsRemaining < 15) {
             const waitTime = (authResult.secondsRemaining + 2) * 1000;
             await page.waitForTimeout(waitTime);
-            authResult = getGoogleAuthCode();
+            authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE2);
         }
-        
-        // Fill username
+
+        // fill login details
         await page.waitForSelector('#mat-input-0', { state: 'visible', timeout: 10000 });
         await page.locator('#mat-input-0').fill(process.env.PORTNET_USER);
-        
-        // Fill password
+
         await page.waitForSelector('#mat-input-1', { state: 'visible', timeout: 10000 });
         await page.locator('#mat-input-1').fill(process.env.PORTNET_PASSWORD);
 
-        // Click login
-        await page.locator('body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button').click();
-        
-        // Wait for 2FA page
+        await page.locator(
+            'body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button'
+        ).click();
+
+        // wait for 2fa 
         await page.waitForSelector('#PASSWORD', { state: 'visible', timeout: 10000 });
         console.log('2FA page loaded');
-        
-        // Get current code (should still have plenty of time)
-        authResult = getGoogleAuthCode();
-        console.log(`At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
-        
-        // Clear field first
-        await page.locator('#PASSWORD').clear();
+
+        // Generate OTP close to submission
+        authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE);
+        console.log(
+            `At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`
+        );
+
+        // ===== ENTER OTP =====
+        const otpInput = page.locator('#PASSWORD');
+
+        await otpInput.clear();
         await page.waitForTimeout(300);
-        
-        // Click to focus
-        await page.locator('#PASSWORD').click();
+        await otpInput.click();
         await page.waitForTimeout(200);
-        
-        // Fill the code
-        await page.locator('#PASSWORD').fill(authResult.code);
-        
-        // Verify it was actually filled
-        const filledValue = await page.locator('#PASSWORD').inputValue();
+        await otpInput.fill(authResult.code);
+
+        // Verify input
+        let filledValue = await otpInput.inputValue();
         console.log(`Verification - Expected: "${authResult.code}", Actual: "${filledValue}"`);
-        
+
+        // Retry once if fill failed
         if (filledValue !== authResult.code) {
-            console.warn('Fill failed, retrying...');
-            
-            // Retry once
-            await page.locator('#PASSWORD').clear();
+            console.warn('OTP fill failed, retrying...');
+            await otpInput.clear();
             await page.waitForTimeout(300);
-            await page.locator('#PASSWORD').click();
-            await page.waitForTimeout(200);
-            
-            // Type password
-            await page.locator('#PASSWORD').type(authResult.code, { delay: 50 });
-            
-            const retryValue = await page.locator('#PASSWORD').inputValue();
-            console.log(`Retry verification: "${retryValue}"`);
-            
-            if (retryValue !== authResult.code) {
-                throw new Error(`Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${retryValue}`);
+            await otpInput.type(authResult.code, { delay: 50 });
+
+            filledValue = await otpInput.inputValue();
+            console.log(`Retry verification: "${filledValue}"`);
+
+            if (filledValue !== authResult.code) {
+                throw new Error(
+                    `Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${filledValue}`
+                );
             }
         }
-        
-        // Click continue
+
+        // Submit 2FA
         await page.locator('#Continue').click();
-        
-        // Wait a bit for processing
         await page.waitForTimeout(3000);
-        
-        // Check current state
+
+        // ===== POST-LOGIN CHECK =====
         const currentUrl = page.url();
         console.log('Current URL:', currentUrl);
-        
-        // Check for error messages first
-        const errorCount = await page.locator('text=/invalid|incorrect|wrong|error/i').count();
+
+        const errorCount = await page
+            .locator('text=/invalid|incorrect|wrong|error/i')
+            .count();
+
         if (errorCount > 0) {
-            const errorText = await page.locator('text=/invalid|incorrect|wrong|error/i').first().textContent();
+            const errorText = await page
+                .locator('text=/invalid|incorrect|wrong|error/i')
+                .first()
+                .textContent();
             throw new Error(`2FA Error: ${errorText}`);
         }
 
-        return res.status(200).json(successResponse('fill-login-details', {
-            message: 'Login and 2FA completed successfully'
-        }));
+        return res.status(200).json(
+            successResponse('fill-login-details', {
+                message: 'Login and 2FA completed successfully'
+            })
+        );
 
     } catch (err) {
         console.error('Login error:', err);
-        return res.status(200).json(errorResponse('fill-login-details', err));
+        return res.status(200).json(
+            errorResponse('fill-login-details', err)
+        );
     }
 });
+
 
 // route to click on others
 router.post("/click-others", async (req, res) => {
     try {
-        
-        const page = getPage();
+        const result = await retryOnTimeout(async (page) => {
+            // Selector for "other"
+            let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
+            // Click on the button
+            await page.locator(otherSelector).click()
+        });
 
-        // Selector for "other"
-        let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-others', result.error));
+        }
 
-        // Click on the button
-        await page.locator(otherSelector).click()
         res.status(200).json(successResponse('click-others'));
 
     } catch (err) {
@@ -141,14 +150,17 @@ router.post("/click-others", async (req, res) => {
 // route to click on supplier management
 router.post("/click-supplier-management", async (req, res) => {
     try {
-        
-        const page = getPage();
+        const result = await retryOnTimeout(async (page) => {
+            // Selector for Supplier Management Button
+            let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
+            // Click on the button
+            await page.locator(supplierManagamentSelector).click()
+        });
 
-        // Selector for Supplier Management Button
-        let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
-        
-        // Click on the button
-        await page.locator(supplierManagamentSelector).click()
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-supplier-management', result.error));
+        }
+
         res.status(200).json(successResponse('click-supplier-management'));
 
     } catch (err) {
@@ -160,24 +172,27 @@ router.post("/click-supplier-management", async (req, res) => {
 // route to click on enquire job payment under payment advice
 router.post("/click-enquire-invoice", async (req, res) => {
     try {
-        
-        const page = getPage();
-        
-        // Get the iframe
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 10000 
+        const result = await retryOnTimeout(async (page) => {
+            // Get the iframe
+            const frameElement = await page.waitForSelector('iframe.frame__webview', {
+                state: 'attached',
+                timeout: 10000
+            });
+
+            const frame = await frameElement.contentFrame();
+
+            if (!frame) {
+                throw new Error('Could not access iframe content');
+            }
+
+            // Click the link inside the iframe
+            await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initInvoiceEnqID"]').click();
         });
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-enquire-invoice', result.error));
         }
-        
-        // Click the link inside the iframe
-        await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initInvoiceEnqID"]').click();
-        
+
         res.status(200).json(successResponse('click-enquire-invoice', { message: 'Clicked Enquire Invoice' }));
 
     } catch (err) {
@@ -186,107 +201,10 @@ router.post("/click-enquire-invoice", async (req, res) => {
     }
 });
 
-
-// comment out route 1 and uncomment route 2 for custom test date
-// comment out route 2 and uncomment route 1 for everyday runs
-// route to select IGH from the dropdown; click accepted and fill date to 1 day ago
-// DO NOT DELETE
-// route 1; 
-// router.post("/fill-job-payment-table", async (req, res) => {
-//     try {
-        
-//         const page = getPage();
-        
-//         // Iframe selector
-//         const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-//             state: 'attached', 
-//             timeout: 10000 
-//         });
-        
-//         const frame = await frameElement.contentFrame();
-        
-//         if (!frame) {
-//             throw new Error('Could not access iframe content');
-//         }
-        
-//         // Select Job Type as IGH
-//         await frame.waitForSelector('select[name="jobType"]', { 
-//             state: 'visible', 
-//             timeout: 10000 
-//         });
-        
-//         await frame.waitForTimeout(500);
-        
-//         await frame.selectOption('select[name="jobType"]', 'IGH');
-//         await frame.waitForTimeout(500);
-        
-//         // Check accepted radio button
-//         await frame.waitForSelector('input[name="accepted"][value="Y"]', {
-//             state: 'visible',
-//             timeout: 5000
-//         });
-//         await frame.click('input[name="accepted"][value="Y"]');
-//         await frame.waitForTimeout(500);
-        
-//         // Date logic
-//         const today = new Date();
-//         const oneDayAgo = new Date(today);
-//         // Get 1 day before current date
-//         oneDayAgo.setDate(today.getDate() - 1);
-        
-//         const day = String(oneDayAgo.getDate()).padStart(2, '0');
-//         const month = String(oneDayAgo.getMonth() + 1).padStart(2, '0');
-//         const year = String(oneDayAgo.getFullYear());
-        
-//         // Fill the from section
-//         await frame.fill('input[name="fDD"]', day);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="fMM"]', month);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="fYYYY"]', year);
-        
-//         // Fill the to section
-//         await frame.fill('input[name="tDD"]', day);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="tMM"]', month);
-//         await frame.waitForTimeout(200);
-//         await frame.fill('input[name="tYYYY"]', year);
-        
-//         await frame.waitForTimeout(500);
-        
-//         // Submit button
-//         await frame.locator('body > form > table > tbody > tr:nth-child(8) > td > input[type=submit]:nth-child(1)').click();
-        
-//         // Wait for the "Details" links to appear
-//         await frame.waitForSelector('a:has-text("Detail Information")', { 
-//             state: 'visible', 
-//             timeout: 10000 
-//         });
-        
-//         await frame.waitForTimeout(1000);
-        
-//         // Get ONLY the rows with "Details" links (the actual job rows)
-//         const detailsLinks = await frame.locator('a:has-text("Detail Information")').all();
-        
-//         console.log(`Found ${detailsLinks.length} job items with Details links`);
-        
-//         res.status(200).json(successResponse('fill-job-payment-table', { 
-//             message: 'Search completed',
-//             itemCount: detailsLinks.length,
-//             fromDate: `${day}/${month}/${year}`
-//         }));
-
-//     } catch (err) {
-//         console.error(err);
-//         res.status(200).json(errorResponse('fill-job-payment-table', err));
-//     }
-// });
-
-// route 2
-// fill table + custom current date
+// route to fill job payment table for daily invoice
 router.post("/fill-job-payment-table", async (req, res) => {
     try {
-        const { currentDate } = req.body; // Pass DD/MM/YYYY or 'NO'
+        const { currentDate } = req.body; // Pass DD/MM/YYYY or omit
 
         const page = getPage();
         
@@ -316,13 +234,24 @@ router.post("/fill-job-payment-table", async (req, res) => {
         await frame.click('input[name="accepted"][value="Y"]');
         await frame.waitForTimeout(500);
 
-        // ===== DATE LOGIC =====
-        let baseDate;
-        if (currentDate && currentDate !== 'NO') {
-            const [dd, mm, yyyy] = currentDate.split('/').map(Number);
-            baseDate = new Date(yyyy, mm - 1, dd);
-        } else {
-            baseDate = new Date();
+        // ================= DATE LOGIC =================
+        let baseDate = new Date(); // default fallback
+
+        if (currentDate && currentDate.trim() !== '') {
+            const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+
+            if (!datePattern.test(currentDate)) {
+                console.warn(`[DATE] Invalid format (expected DD/MM/YYYY): ${currentDate}`);
+            } else {
+                const [dd, mm, yyyy] = currentDate.split('/').map(Number);
+                const parsedDate = new Date(yyyy, mm - 1, dd);
+
+                if (isNaN(parsedDate.getTime())) {
+                    console.warn(`[DATE] Invalid date value: ${currentDate}`);
+                } else {
+                    baseDate = parsedDate;
+                }
+            }
         }
 
         // Subtract 1 day
@@ -349,7 +278,9 @@ router.post("/fill-job-payment-table", async (req, res) => {
         await frame.waitForTimeout(500);
 
         // Submit button
-        await frame.locator('body > form > table > tbody > tr:nth-child(8) > td > input[type=submit]:nth-child(1)').click();
+        await frame.locator(
+            'body > form > table > tbody > tr:nth-child(8) > td > input[type=submit]:nth-child(1)'
+        ).click();
 
         // Wait for the "Details" links to appear
         await frame.waitForSelector('a:has-text("Detail Information")', { 
@@ -358,7 +289,6 @@ router.post("/fill-job-payment-table", async (req, res) => {
         });
         await frame.waitForTimeout(1000);
 
-        // Get ONLY the rows with "Details" links (the actual job rows)
         const detailsLinks = await frame.locator('a:has-text("Detail Information")').all();
         console.log(`Found ${detailsLinks.length} job items with Details links`);
 

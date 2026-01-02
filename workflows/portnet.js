@@ -102,6 +102,39 @@ function successResponse(step, data = {}) {
     };
 }
 
+async function retryOnTimeout(actionFn) {
+    const currentPage = getPage();
+
+    // First attempt
+    try {
+        await actionFn(currentPage);
+        return { success: true };
+    } catch (firstError) {
+        // Check if error is timeout or element-related
+        const isRetryableError =
+            firstError.message.includes('Timeout') ||
+            firstError.message.includes('waiting for selector') ||
+            firstError.message.includes('Element is not attached') ||
+            firstError.message.includes('unable to click') ||
+            firstError.name === 'TimeoutError';
+
+        if (!isRetryableError) {
+            return { success: false, error: firstError };
+        }
+
+        // Refresh and retry
+        await currentPage.reload({ waitUntil: 'networkidle' });
+        await currentPage.waitForTimeout(1000);
+
+        try {
+            await actionFn(currentPage);
+            return { success: true };
+        } catch (secondError) {
+            return { success: false, error: secondError };
+        }
+    }
+}
+
 module.exports = { 
     getPage, 
     getBrowser, 
@@ -109,5 +142,6 @@ module.exports = {
     cleanup,
     isBrowserActive,
     errorResponse,
-    successResponse
+    successResponse,
+    retryOnTimeout,
 };
