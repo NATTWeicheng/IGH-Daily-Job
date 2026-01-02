@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser } = require('../workflows/portnet.js')
+const {getPage, cleanup, launchAndGoto, errorResponse, successResponse, getBrowser, retryOnTimeout } = require('../workflows/portnet.js')
 const {getGoogleAuthCode} = require('../googleAuthToken.js')
 const path = require('path');
 const fs = require('fs');
@@ -25,112 +25,122 @@ router.post('/stop-chromium', async (req, res) => {
 // go to page
 router.post("/fill-login-details", async (req, res) => {
     try {
-        const result = await launchAndGoto(process.env.PORTNET_WEBSITE);
-        
+        await launchAndGoto(process.env.PORTNET_WEBSITE);
         const page = getPage();
-        
-        // Check timing BEFORE starting login
-        let authResult = getGoogleAuthCode();
-        console.log(`Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
-        
-        // If less than 15 seconds, wait for fresh code
+
+        // ===== PRE-LOGIN OTP CHECK =====
+        let authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE);
+        console.log(
+            `Pre-login timing check: ${authResult.code}, ${authResult.secondsRemaining}s remaining`
+        );
+
+        // If OTP is about to expire, wait for a fresh window
         if (authResult.secondsRemaining < 15) {
             const waitTime = (authResult.secondsRemaining + 2) * 1000;
             await page.waitForTimeout(waitTime);
-            authResult = getGoogleAuthCode();
+            authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE2);
         }
-        
-        // Fill username
+
+        // fill login details
         await page.waitForSelector('#mat-input-0', { state: 'visible', timeout: 10000 });
         await page.locator('#mat-input-0').fill(process.env.PORTNET_USER);
-        
-        // Fill password
+
         await page.waitForSelector('#mat-input-1', { state: 'visible', timeout: 10000 });
         await page.locator('#mat-input-1').fill(process.env.PORTNET_PASSWORD);
 
-        // Click login
-        await page.locator('body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button').click();
-        
-        // Wait for 2FA page
+        await page.locator(
+            'body > app-root > app-login-page > div > mat-sidenav-container > mat-sidenav-content > div.login-form > form > div:nth-child(3) > button'
+        ).click();
+
+        // wait for 2fa 
         await page.waitForSelector('#PASSWORD', { state: 'visible', timeout: 10000 });
         console.log('2FA page loaded');
-        
-        // Get current code (should still have plenty of time)
-        authResult = getGoogleAuthCode();
-        console.log(`At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`);
-        
-        // Clear field first
-        await page.locator('#PASSWORD').clear();
+
+        // Generate OTP close to submission
+        authResult = getGoogleAuthCode(process.env.GOOGLE_AUTH_CODE);
+        console.log(
+            `At 2FA page: ${authResult.code}, ${authResult.secondsRemaining}s remaining`
+        );
+
+        // ===== ENTER OTP =====
+        const otpInput = page.locator('#PASSWORD');
+
+        await otpInput.clear();
         await page.waitForTimeout(300);
-        
-        // Click to focus
-        await page.locator('#PASSWORD').click();
+        await otpInput.click();
         await page.waitForTimeout(200);
-        
-        // Fill the code
-        await page.locator('#PASSWORD').fill(authResult.code);
-        
-        // Verify it was actually filled
-        const filledValue = await page.locator('#PASSWORD').inputValue();
+        await otpInput.fill(authResult.code);
+
+        // Verify input
+        let filledValue = await otpInput.inputValue();
         console.log(`Verification - Expected: "${authResult.code}", Actual: "${filledValue}"`);
-        
+
+        // Retry once if fill failed
         if (filledValue !== authResult.code) {
-            console.warn('Fill failed, retrying...');
-            
-            // Retry once
-            await page.locator('#PASSWORD').clear();
+            console.warn('OTP fill failed, retrying...');
+            await otpInput.clear();
             await page.waitForTimeout(300);
-            await page.locator('#PASSWORD').click();
-            await page.waitForTimeout(200);
-            
-            // Type password
-            await page.locator('#PASSWORD').type(authResult.code, { delay: 50 });
-            
-            const retryValue = await page.locator('#PASSWORD').inputValue();
-            console.log(`Retry verification: "${retryValue}"`);
-            
-            if (retryValue !== authResult.code) {
-                throw new Error(`Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${retryValue}`);
+            await otpInput.type(authResult.code, { delay: 50 });
+
+            filledValue = await otpInput.inputValue();
+            console.log(`Retry verification: "${filledValue}"`);
+
+            if (filledValue !== authResult.code) {
+                throw new Error(
+                    `Failed to fill 2FA code. Expected: ${authResult.code}, Got: ${filledValue}`
+                );
             }
         }
-        
-        // Click continue
+
+        // Submit 2FA
         await page.locator('#Continue').click();
-        
-        // Wait a bit for processing
         await page.waitForTimeout(3000);
-        
-        // Check current state
+
+        // ===== POST-LOGIN CHECK =====
         const currentUrl = page.url();
         console.log('Current URL:', currentUrl);
-        
-        // Check for error messages first
-        const errorCount = await page.locator('text=/invalid|incorrect|wrong|error/i').count();
+
+        const errorCount = await page
+            .locator('text=/invalid|incorrect|wrong|error/i')
+            .count();
+
         if (errorCount > 0) {
-            const errorText = await page.locator('text=/invalid|incorrect|wrong|error/i').first().textContent();
+            const errorText = await page
+                .locator('text=/invalid|incorrect|wrong|error/i')
+                .first()
+                .textContent();
             throw new Error(`2FA Error: ${errorText}`);
         }
 
-        return res.status(200).json(successResponse('fill-login-details', {
-            message: 'Login and 2FA completed successfully'
-        }));
+        return res.status(200).json(
+            successResponse('fill-login-details', {
+                message: 'Login and 2FA completed successfully'
+            })
+        );
 
     } catch (err) {
         console.error('Login error:', err);
-        return res.status(200).json(errorResponse('fill-login-details', err));
+        return res.status(200).json(
+            errorResponse('fill-login-details', err)
+        );
     }
 });
 
 // route to click on others
 router.post("/click-others", async (req, res) => {
     try {
-        const page = getPage();
-        let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
-        await page.locator(otherSelector).click()
-        
-        // Verify: Wait for panel to be visible
-        await page.waitForSelector('.lv2-panel', { state: 'visible', timeout: 5000 });
-        
+        const result = await retryOnTimeout(async (page) => {
+            let otherSelector = 'body > app-root > div > div.slidebar > div:nth-child(8) > div'
+            await page.locator(otherSelector).click()
+
+            // Verify: Wait for panel to be visible
+            await page.waitForSelector('.lv2-panel', { state: 'visible', timeout: 5000 });
+        });
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-others', result.error));
+        }
+
         res.status(200).json(successResponse('click-others', { message: 'Clicked Others successfully' }));
 
     } catch (err) {
@@ -142,16 +152,21 @@ router.post("/click-others", async (req, res) => {
 // route to click on supplier management
 router.post("/click-supplier-management", async (req, res) => {
     try {
-        const page = getPage();
-        let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
-        await page.locator(supplierManagamentSelector).click()
-        
-        // Verify: Wait for iframe to appear
-        await page.waitForSelector('iframe.frame__webview', { 
-            state: 'visible', 
-            timeout: 10000 
+        const result = await retryOnTimeout(async (page) => {
+            let supplierManagamentSelector = 'body > app-root > div > div.main-content > app-container-group > div > div.half-width > div:nth-child(2) > div:nth-child(2) > div > div.lv2-panel > div:nth-child(5) > div.mat-mdc-menu-trigger.subheading.flex-layout'
+            await page.locator(supplierManagamentSelector).click()
+
+            // Verify: Wait for iframe to appear
+            await page.waitForSelector('iframe.frame__webview', {
+                state: 'visible',
+                timeout: 10000
+            });
         });
-        
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-supplier-management', result.error));
+        }
+
         res.status(200).json(successResponse('click-supplier-management', { message: 'Clicked Supplier Management successfully' }));
 
     } catch (err) {
@@ -163,40 +178,44 @@ router.post("/click-supplier-management", async (req, res) => {
 // route to click on enquire job payment under payment advice
 router.post("/click-job-payment", async (req, res) => {
     try {
-        const page = getPage();
-        
-        // Get the iframe
-        const frameElement = await page.waitForSelector('iframe.frame__webview', { 
-            state: 'attached', 
-            timeout: 15000
+        const result = await retryOnTimeout(async (page) => {
+            // Get the iframe
+            const frameElement = await page.waitForSelector('iframe.frame__webview', {
+                state: 'attached',
+                timeout: 15000
+            });
+
+            await page.waitForTimeout(1000);
+
+            const frame = await frameElement.contentFrame();
+
+            if (!frame) {
+                throw new Error('Could not access iframe content');
+            }
+
+            // Wait for iframe content to load
+            await frame.waitForLoadState('domcontentloaded', { timeout: 10000 });
+
+            // Wait for "PAYMENT MODULES" to appear in the iframe
+            await frame.waitForSelector('text=PAYMENT MODULES', {
+                state: 'visible',
+                timeout: 10000
+            });
+
+            // Click the link inside the iframe
+            await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initJobPaymentEnquiryID"]').click();
+
+            // Verify: Wait for the form to load
+            await frame.waitForSelector('select[name="jobTy"]', {
+                state: 'visible',
+                timeout: 10000
+            });
         });
-        
-        await page.waitForTimeout(1000);
-        
-        const frame = await frameElement.contentFrame();
-        
-        if (!frame) {
-            throw new Error('Could not access iframe content');
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-job-payment', result.error));
         }
-        
-        // Wait for iframe content to load
-        await frame.waitForLoadState('domcontentloaded', { timeout: 10000 });
-        
-        // Wait for "PAYMENT MODULES" to appear in the iframe
-        await frame.waitForSelector('text=PAYMENT MODULES', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
-        // Click the link inside the iframe
-        await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initJobPaymentEnquiryID"]').click();
-        
-        // Verify: Wait for the form to load
-        await frame.waitForSelector('select[name="jobTy"]', { 
-            state: 'visible', 
-            timeout: 10000 
-        });
-        
+
         res.status(200).json(successResponse('click-job-payment', { message: 'Clicked Enquire Job Payment and verified form loaded' }));
 
     } catch (err) {
