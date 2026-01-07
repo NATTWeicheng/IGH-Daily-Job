@@ -175,6 +175,55 @@ router.post("/click-supplier-management", async (req, res) => {
     }
 });
 
+// route to click on enquire job payment under payment advice
+router.post("/click-job-payment", async (req, res) => {
+    try {
+        const result = await retryOnTimeout(async (page) => {
+            // Get the iframe
+            const frameElement = await page.waitForSelector('iframe.frame__webview', {
+                state: 'attached',
+                timeout: 15000
+            });
+
+            await page.waitForTimeout(1000);
+
+            const frame = await frameElement.contentFrame();
+
+            if (!frame) {
+                throw new Error('Could not access iframe content');
+            }
+
+            // Wait for iframe content to load
+            await frame.waitForLoadState('domcontentloaded', { timeout: 10000 });
+
+            // Wait for "PAYMENT MODULES" to appear in the iframe
+            await frame.waitForSelector('text=PAYMENT MODULES', {
+                state: 'visible',
+                timeout: 10000
+            });
+
+            // Click the link inside the iframe
+            await frame.locator('a[href="/SUMS-WLS12/SUMSMainServlet?requestID=initJobPaymentEnquiryID"]').click();
+
+            // Verify: Wait for the form to load
+            await frame.waitForSelector('select[name="jobTy"]', {
+                state: 'visible',
+                timeout: 10000
+            });
+        });
+
+        if (!result.success) {
+            return res.status(200).json(errorResponse('click-job-payment', result.error));
+        }
+
+        res.status(200).json(successResponse('click-job-payment', { message: 'Clicked Enquire Job Payment and verified form loaded' }));
+
+    } catch (err) {
+        console.error(err);
+        res.status(200).json(errorResponse('click-job-payment', err));
+    }
+});
+
 // route to fill table for daily jobs
 router.post("/fill-job-payment-table", async (req, res) => {
     try {
